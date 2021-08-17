@@ -95,7 +95,7 @@ def momentum_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor) 
 
 # Calculate x2_{t} from x2_{t+1} and f(x1_{t}) by manually computing the inverse of momentum_coupling_forward.
 def momentum_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
-    return output / momentum_ema_beta - fn_out * (1 - momentum_ema_beta)
+    return (output - fn_out * (1 - momentum_ema_beta)) / momentum_ema_beta
 
 
 # Pass in coupling functions which will be used instead of x2_{t} + f(x1_{t}) and x2_{t+1} - f(x1_{t})
