@@ -103,7 +103,46 @@ rev_model = revlib.ReversibleSequential(*[nn.Conv2d(channels, channels, (3, 3), 
                                         coupling_forward=momentum_coupling_forward,
                                         coupling_inverse=momentum_coupling_inverse)
 
-inp = torch.randn((16, channels, 224, 224))
+inp = torch.randn((16, channels * 2, 224, 224))
 out = rev_model(inp)
-assert out.size() == (16, channels, 224, 224)
+assert out.size() == (16, channels * 2, 224, 224)
+```
+
+#### Reformer
+
+[Reformer](https://arxiv.org/abs/2001.04451) uses RevNet, together with chunking and LSH-attention to efficiently
+calculate train a transformer. Using revlib, common implementations, such
+as [lucidrains' Reformer](https://github.com/lucidrains/reformer-pytorch/), can be improved upon to use less memory.
+Below we're still using the basic building blocks from lucidrains' code, to have a comparable model.
+
+```PYTHON
+import torch
+from torch import nn
+from reformer_pytorch.reformer_pytorch import LSHSelfAttention, Chunk, FeedForward, AbsolutePositionalEmbedding
+import revlib
+
+
+class Reformer(torch.nn.Module):
+    def __init__(self, sequence_length: int, features: int, depth: int, heads: int, bucket_size: int = 64,
+                 lsh_hash_count: int = 8, ff_chunks: int = 128, input_classes: int = 256, output_classes: int = 256):
+        super(Reformer, self).__init__()
+        self.token_embd = nn.Embedding(input_classes, features * 2)
+        self.pos_embd = AbsolutePositionalEmbedding(features, sequence_length)
+
+        self.core = revlib.ReversibleSequential([nn.Sequential(nn.LayerNorm(features), layer) for _ in range(depth)
+                                                 for layer in
+                                                 [LSHSelfAttention(features, heads, bucket_size, lsh_hash_count),
+                                                  Chunk(ff_chunks, FeedForward(features, activation=nn.GELU))]])
+        self.out_norm = nn.LayerNorm(features * 2)
+        self.out_linear = nn.Linear(features * 2, output_classes)
+
+    def forward(self, inp: torch.Tensor) -> torch.Tensor:
+        return self.out_linear(self.out_norm(self.core(self.token_embd(inp) + self.pos_embd)))
+
+
+sequence = 1024
+classes = 16
+model = Reformer(sequence, 256, 6, 8, output_classes=classes)
+out = model(torch.ones((16, sequence)))
+assert out.size() == (16, sequence, classes)
 ```
