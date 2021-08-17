@@ -5,7 +5,7 @@ Simple and efficient RevNet-Library with DeepSpeed support
 ## Features
 
 * Half the constant memory usage and faster than RevNet libraries
-* Less memory than gradient checkpointing (`1 * output_size` instead of `(n_layers + 1) * output_size`)
+* Less memory than gradient checkpointing (`1 * output_size` instead of `n_layers * output_size`)
 * Same speed as activation checkpointing
 * Extensible
 * Trivial code (<100 Lines)
