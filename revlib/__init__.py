@@ -24,11 +24,14 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
                 coupling_inverse: typing.Callable) -> QUAD_TENSOR:
         ctx.mod = mod
         ctx.coupling_inverse = coupling_inverse
+        ctx.forward_rng_state = torch.get_rng_state()
         return x1, back_x0, coupling_forward(x0, mod(x1)), back_x1
 
     @staticmethod
     def backward(ctx, dy0: torch.Tensor, y0: torch.Tensor, dy1: torch.Tensor, y1: torch.Tensor
                  ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None]:
+        original_rng_state = torch.get_rng_state()
+        torch.set_rng_state(ctx.forward_rng_state)
         with torch.enable_grad():
             y0 = y0.requires_grad_(True)
             out = ctx.mod(y0)
@@ -42,6 +45,7 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
                     p.grad = g
                 else:
                     p.grad.data.add_(g)
+        torch.set_rng_state(original_rng_state)
         with torch.enable_grad():
             return dy1.detach(), x0.detach(), dx0.add(dy0).detach(), y0.detach(), None, None, None
 
