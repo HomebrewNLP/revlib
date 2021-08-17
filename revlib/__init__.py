@@ -20,18 +20,20 @@ class _ReplaceGrad(torch.autograd.Function):
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x0: torch.Tensor, back_x0: torch.Tensor, x1: torch.Tensor, back_x1: torch.Tensor,
-                mod: torch.nn.Module) -> QUAD_TENSOR:
+                mod: torch.nn.Module, coupling_forward: typing.Callable,
+                coupling_inverse: typing.Callable) -> QUAD_TENSOR:
         ctx.mod = mod
-        return x1, back_x0, x0 + mod(x1), back_x1
+        ctx.coupling_inverse = coupling_inverse
+        return x1, back_x0, coupling_forward(x0, mod(x1)), back_x1
 
     @staticmethod
     def backward(ctx, dy0: torch.Tensor, y0: torch.Tensor, dy1: torch.Tensor, y1: torch.Tensor
-                 ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None]:
+                 ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None]:
         with torch.enable_grad():
             y0 = y0.requires_grad_(True)
             out = ctx.mod(y0)
         with torch.no_grad():
-            x0 = y1 - out.detach()
+            x0 = ctx.coupling_inverse(y1, out.detach())
         with torch.enable_grad():
             dx0, *param_grad = torch.autograd.grad(out, (y0,) + tuple(ctx.mod.parameters()), dy1)
         with torch.no_grad():
@@ -41,27 +43,39 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
                 else:
                     p.grad.data.add_(g)
         with torch.enable_grad():
-            return dy1.detach(), x0.detach(), dx0.add(dy0).detach(), y0.detach(), None
+            return dy1.detach(), x0.detach(), dx0.add(dy0).detach(), y0.detach(), None, None, None
 
 
 replace_grad = _ReplaceGrad().apply
 reverse_and_swap = _ReversibleHalfResidualSwapFn().apply
 
 
+def additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
+    return other_stream + fn_out
+
+
+def momentum_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
+    return output - fn_out
+
+
 class ReversibleModule(torch.nn.Module):
-    def __init__(self, wrapped_module: torch.nn.Module):
+    def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Callable = additive_coupling_forward,
+                 coupling_inverse: typing.Callable = momentum_coupling_inverse):
         super(ReversibleModule, self).__init__()
         self.wrapped_module = wrapped_module
+        self.coupling_forward = coupling_forward
+        self.coupling_inverse = coupling_inverse
 
     def forward(self, inp: QUAD_TENSOR) -> QUAD_TENSOR:
-        return reverse_and_swap(*inp, self.wrapped_module)
+        return reverse_and_swap(*inp, self.wrapped_module, self.coupling_forward, self.coupling_inverse)
 
 
 class ReversibleSequential(torch.nn.Module):
-    def __init__(self, *modules, split_dim=1):
+    def __init__(self, *modules, split_dim=1, coupling_forward: typing.Callable = additive_coupling_forward,
+                 coupling_inverse: typing.Callable = momentum_coupling_inverse):
         super(ReversibleSequential, self).__init__()
-        self.stem = torch.nn.Sequential(*[m if isinstance(m, ReversibleModule) else ReversibleModule(m)
-                                          for m in modules])
+        self.stem = torch.nn.Sequential(*[m if isinstance(m, ReversibleModule) else
+                                          ReversibleModule(m, coupling_forward, coupling_inverse) for m in modules])
         self.split_dim = split_dim
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
