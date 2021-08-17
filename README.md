@@ -4,8 +4,8 @@ Simple and efficient RevNet-Library with DeepSpeed support
 
 ## Features
 
-* Half the constant memory usage of other RevNet libraries
-* Less memory than gradient checkpointing (`1 * output_size` instead of `n_layers * output_size`)
+* Half the constant memory usage and faster than RevNet libraries
+* Less memory than gradient checkpointing (`1 * output_size` instead of `(n_layers + 1) * output_size`)
 * Same speed as activation checkpointing
 * Extensible
 * Trivial code (<100 Lines)
@@ -22,10 +22,10 @@ python3 -m pip install revlib
 
 #### Sequential CNN like iRevNet
 
-[iRevNet](https://openreview.net/forum?id=HJsjkMb0Z) is not on partially reversible, but instead a fully-invertible
-model. The [original source code](https://github.com/jhjacobsen/pytorch-i-revnet) looks complex at first glance. It also
-doesn't use the memory-savings it could utilize, as RevNet requires custom AutoGrad functions that are hard to maintain.
-Using revlib, an iRevNet can be implemented like this:
+[iRevNet](https://openreview.net/forum?id=HJsjkMb0Z) is not only partially reversible but instead a fully-invertible
+model. The [source code](https://github.com/jhjacobsen/pytorch-i-revnet) looks complex at first glance. It also doesn't
+use the memory savings it could utilize, as RevNet requires custom AutoGrad functions that are hard to maintain. An
+iRevNet can be implemented like this using revlib:
 
 ```PYTHON
 import torch
@@ -38,7 +38,7 @@ depth = 16
 classes = 1000
 
 
-# Create basic function that's executed multiple times in a reversible way. (Like f() in ResNet)
+# Create a basic function that's reversibly executed multiple times. (Like f() in ResNet)
 def conv(in_channels, out_channels):
     return nn.Conv2d(in_channels, out_channels, (3, 3), padding=1)
 
@@ -56,7 +56,7 @@ def block():
                          nn.Conv2d(channels, channels, (3, 3), padding=1))
 
 
-# Create reversible model. f() is invoked depth-times with different weights.
+# Create a reversible model. f() is invoked depth-times with different weights.
 rev_model = revlib.ReversibleSequential(*[block() for _ in range(depth)])
 
 # Wrap reversible model with non-reversible layers
@@ -64,7 +64,7 @@ model = nn.Sequential(nn.Conv2d(3, 2 * channels, (3, 3)),
                       rev_model,
                       nn.Conv2d(2 * channels, classes, (3, 3)))
 
-# Use it like you would a normal PyTorch model
+# Use it like you would a regular PyTorch model
 inp = torch.randn((16, 3, 224, 224))
 out = model(inp)
 assert out.size() == (16, 1000, 224, 224)
@@ -72,8 +72,8 @@ assert out.size() == (16, 1000, 224, 224)
 
 #### MomentumNet
 
-[MomentumNet](https://arxiv.org/abs/2102.07870) is another recent paper that made great advancements in the area of
-memory-efficient networks. They propose to use a momentum stream instead of a second model output as illustrated
+[MomentumNet](https://arxiv.org/abs/2102.07870) is another recent paper that made significant advancements in the area
+of memory-efficient networks. They propose to use a momentum stream instead of a second model output as illustrated
 below: ![MomentumNetIllustration](http://limitless.sh/momentumnet.png). Implementing that with revlib requires you to
 write a custom coupling operation (functional analogue to [MemCNN](https://github.com/silvandeleemput/memcnn)) that
 merges input and output streams.
@@ -110,10 +110,10 @@ assert out.size() == (16, channels * 2, 224, 224)
 
 #### Reformer
 
-[Reformer](https://arxiv.org/abs/2001.04451) uses RevNet, together with chunking and LSH-attention to efficiently
-calculate train a transformer. Using revlib, common implementations, such
+[Reformer](https://arxiv.org/abs/2001.04451) uses RevNet with chunking and LSH-attention to efficiently train a
+transformer. Using revlib, standard implementations, such
 as [lucidrains' Reformer](https://github.com/lucidrains/reformer-pytorch/), can be improved upon to use less memory.
-Below we're still using the basic building blocks from lucidrains' code, to have a comparable model.
+Below we're still using the basic building blocks from lucidrains' code to have a comparable model.
 
 ```PYTHON
 import torch
@@ -146,3 +146,26 @@ model = Reformer(sequence, 256, 6, 8, output_classes=classes)
 out = model(torch.ones((16, sequence)))
 assert out.size() == (16, sequence, classes)
 ```
+
+## Explanation
+
+Most other RevNet libraries, such as [MemCNN](https://github.com/silvandeleemput/memcnn)
+and [Revtorch](https://github.com/RobinBruegger/RevTorch) calculate both f() and g() in one go, to create one large
+computation. RevLib, on the other hand, brings Mesh
+TensorFlow's ["reversible half residual and swap"](https://github.com/tensorflow/mesh/blob/master/mesh_tensorflow/layers.py#L2191)
+to PyTorch. `reversible_half_residual_and_swap` computes only one of f() and g() and swaps the inputs and gradients.
+This way, the library only has to store one output as it can recover the other output during the backward pass.\
+Following Mesh TensorFlow's example, revlib also uses separate x1 and x2 tensors instead of concatenating and splitting
+at every step to reduce the cost of memory-bound operations.
+
+RevNet's memory consumption doesn't scale with its depth, so it's significantly more memory-efficient for deep models.
+One problem in most implementations was that two tensors needed to be stored in the output, quadrupling the required
+memory. The high memory consumption rendered RevNet nearly useless for small networks, such as BERT, with its six
+layers.\
+RevLib works around this problem by storing only one output and two inputs for each forward pass, giving a model as
+small as BERT a >2x improvement!
+
+Ignoring the dual-path structure of a RevNet, it usually used to be much slower than gradient checkpointing. However,
+RevLib uses minimal coupling functions and has no overhead between Sequence items, allowing it to train as fast as a
+comparable model with gradient checkpointing.
+
