@@ -58,28 +58,34 @@ def additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor) 
     return other_stream + fn_out
 
 
-def momentum_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
+def additive_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
     return output - fn_out
 
 
 class ReversibleModule(torch.nn.Module):
-    def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Callable = additive_coupling_forward,
-                 coupling_inverse: typing.Callable = momentum_coupling_inverse):
+    def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Optional[typing.Callable] = None,
+                 coupling_inverse: typing.Optional[typing.Callable] = None):
         super(ReversibleModule, self).__init__()
         self.wrapped_module = wrapped_module
-        self.coupling_forward = coupling_forward
-        self.coupling_inverse = coupling_inverse
+        self.coupling_forward = coupling_forward or additive_coupling_forward
+        self.coupling_inverse = coupling_inverse or additive_coupling_inverse
 
     def forward(self, inp: QUAD_TENSOR) -> QUAD_TENSOR:
         return reverse_and_swap(*inp, self.wrapped_module, self.coupling_forward, self.coupling_inverse)
 
 
 class ReversibleSequential(torch.nn.Module):
-    def __init__(self, *modules, split_dim=1, coupling_forward: typing.Callable = additive_coupling_forward,
-                 coupling_inverse: typing.Callable = momentum_coupling_inverse):
+    def __init__(self, *modules, split_dim=1,
+                 coupling_forward: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
+                 coupling_inverse: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None):
         super(ReversibleSequential, self).__init__()
+        coupling_forward = list(coupling_forward) if coupling_forward else [None]
+        coupling_inverse = list(coupling_inverse) if coupling_inverse else [None]
         self.stem = torch.nn.Sequential(*[m if isinstance(m, ReversibleModule) else
-                                          ReversibleModule(m, coupling_forward, coupling_inverse) for m in modules])
+                                          ReversibleModule(m,
+                                                           coupling_forward[i % len(coupling_forward)],
+                                                           coupling_inverse[i % len(coupling_inverse)])
+                                          for i, m in enumerate(modules)])
         self.split_dim = split_dim
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:

@@ -20,7 +20,7 @@ python3 -m pip install revlib
 
 ### Examples
 
-#### Sequential CNN like iRevNet
+#### iRevNet
 
 [iRevNet](https://openreview.net/forum?id=HJsjkMb0Z) is not only partially reversible but instead a fully-invertible
 model. The [source code](https://github.com/jhjacobsen/pytorch-i-revnet) looks complex at first glance. It also doesn't
@@ -88,20 +88,22 @@ depth = 16
 momentum_ema_beta = 0.99
 
 
-# Compute x2_{t+1} from x2_{t} and f(x1_{t}) by merging x2 and f(x1) in the forward pass.
+# Compute y2 from x2 and f(x1) by merging x2 and f(x1) in the forward pass.
 def momentum_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
     return other_stream * momentum_ema_beta + fn_out * (1 - momentum_ema_beta)
 
 
-# Calculate x2_{t} from x2_{t+1} and f(x1_{t}) by manually computing the inverse of momentum_coupling_forward.
+# Calculate x2 from y2 and f(x1) by manually computing the inverse of momentum_coupling_forward.
 def momentum_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
     return (output - fn_out * (1 - momentum_ema_beta)) / momentum_ema_beta
 
 
-# Pass in coupling functions which will be used instead of x2_{t} + f(x1_{t}) and x2_{t+1} - f(x1_{t})
-rev_model = revlib.ReversibleSequential(*[nn.Conv2d(channels, channels, (3, 3), padding=1) for _ in range(depth)],
-                                        coupling_forward=momentum_coupling_forward,
-                                        coupling_inverse=momentum_coupling_inverse)
+# Pass in coupling functions which will be used instead of x2 + f(x1) and y2 - f(x1)
+rev_model = revlib.ReversibleSequential(*[layer for _ in range(depth)
+                                          for layer in [nn.Conv2d(channels, channels, (3, 3), padding=1),
+                                                        nn.Identity()]],
+                                        coupling_forward=[momentum_coupling_forward, revlib.additive_coupling_forward],
+                                        coupling_inverse=[momentum_coupling_inverse, revlib.additive_coupling_inverse])
 
 inp = torch.randn((16, channels * 2, 224, 224))
 out = rev_model(inp)
