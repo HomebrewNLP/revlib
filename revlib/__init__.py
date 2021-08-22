@@ -1,3 +1,4 @@
+import contextlib
 import typing
 
 import torch
@@ -14,12 +15,14 @@ def additive_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> tor
 class ReversibleSequential(torch.nn.Module):
     def __init__(self, *modules, split_dim=1,
                  coupling_forward: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
-                 coupling_inverse: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None):
+                 coupling_inverse: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
+                 memory_savings=True):
         super(ReversibleSequential, self).__init__()
-        self.split_dim = split_dim
         self.module_list = torch.nn.ModuleList(modules)
+        self.split_dim = split_dim
         self.coupling_forward = list(coupling_forward) if coupling_forward else [additive_coupling_forward]
         self.coupling_inverse = list(coupling_inverse) if coupling_inverse else [additive_coupling_inverse]
+        self.memory_savings = memory_savings
 
         self.cpu_state: torch.Tensor = torch.get_rng_state()
         self.cuda: bool = torch.cuda._initialized
@@ -58,20 +61,23 @@ class ReversibleSequential(torch.nn.Module):
                 out = self.module_list[self.idx](self.x1)
             x1 = self.x1
             x0 = self.x0
-            self.x1 = self.coupling_inverse[self.mod_idx](self.x0, out.detach())
-            self.x0 = x1
+            self.x1 = self.coupling_inverse[self.mod_idx](self.x0, out.detach()).detach_()
+            self.x0 = x1.detach_()
             with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                 _unused = self.coupling_forward[self.mod_idx](x0, out)
         return self.unpack(key)
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
         self.x0, self.x1 = inp.chunk(2, self.split_dim)
+        hook = contextlib.nullcontext()
+        if self.memory_savings:
+            hook = torch.autograd.graph.saved_tensors_hooks(self.pack, self.unpack)
         for self.idx in range(len(self.module_list)):
             self.mod_idx = self.idx % len(self.coupling_forward)
             self.counter = 0
             self.storage = {}
             x0, x1 = self.x0, self.x1
-            with torch.autograd.graph.saved_tensors_hooks(self.pack, self.unpack):
+            with hook:
                 y1 = self.coupling_forward[self.mod_idx](x0, self.module_list[self.idx](x1))
             self.x1 = y1
             self.x0 = x1
