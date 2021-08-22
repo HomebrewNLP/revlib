@@ -52,20 +52,16 @@ class ReversibleSequential(torch.nn.Module):
                 self.inner_unpack(key)
             return self.storage[key]
 
-        rng_devices = []
-        if self.cuda:
-            rng_devices = self.devices
-        with torch.random.fork_rng(devices=rng_devices):
-            torch.set_rng_state(self.cpu_state)
-            with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
-                with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
-                    out = self.module_list[self.idx](self.x1)
-                x1 = self.x1
-                x0 = self.x0
-                self.x1 = self.coupling_inverse[self.mod_idx](self.x0, out.detach())
-                self.x0 = x1
-                with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
-                    _unused = self.coupling_forward[self.mod_idx](x0, out)
+        torch.set_rng_state(self.cpu_state)
+        with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
+            with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
+                out = self.module_list[self.idx](self.x1)
+            x1 = self.x1
+            x0 = self.x0
+            self.x1 = self.coupling_inverse[self.mod_idx](self.x0, out.detach())
+            self.x0 = x1
+            with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
+                _unused = self.coupling_forward[self.mod_idx](x0, out)
         return self.unpack(key)
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
