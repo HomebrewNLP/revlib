@@ -34,7 +34,7 @@ import revlib
 
 channels = 64
 channel_multiplier = 4
-depth = 16
+depth = 3
 classes = 1000
 
 
@@ -46,7 +46,7 @@ def conv(in_channels, out_channels):
 def block_conv(in_channels, out_channels):
     return nn.Sequential(conv(in_channels, out_channels),
                          nn.Dropout(0.2),
-                         nn.BatchNorm2d(channels),
+                         nn.BatchNorm2d(out_channels),
                          nn.ReLU())
 
 
@@ -60,14 +60,13 @@ def block():
 rev_model = revlib.ReversibleSequential(*[block() for _ in range(depth)])
 
 # Wrap reversible model with non-reversible layers
-model = nn.Sequential(nn.Conv2d(3, 2 * channels, (3, 3)),
-                      rev_model,
-                      nn.Conv2d(2 * channels, classes, (3, 3)))
+model = nn.Sequential(conv(3, 2*channels), rev_model, conv(2 * channels, classes))
 
 # Use it like you would a regular PyTorch model
-inp = torch.randn((16, 3, 224, 224))
+inp = torch.randn((1, 3, 224, 224))
 out = model(inp)
-assert out.size() == (16, 1000, 224, 224)
+out.mean().backward()
+assert out.size() == (1, 1000, 224, 224)
 ```
 
 #### MomentumNet
