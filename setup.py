@@ -10,7 +10,7 @@ setuptools.setup(
     name='revlib',
     license='BSD',
     description='Simple and efficient RevNet-Library with DeepSpeed support',
-    version='v1.0.4',
+    version='v1.0.5',
     long_description=README,
     url='https://github.com/clashluke/revlib',
     packages=setuptools.find_packages(),

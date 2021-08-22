@@ -8,13 +8,13 @@ QUAD_TENSOR = typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tenso
 class _ReplaceGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, inp0: torch.Tensor, inp1: torch.Tensor, tmp_inp0: torch.Tensor, tmp_inp1: torch.Tensor):
-        ctx.save_for_backward(tmp_inp0)
+        ctx.save_for_backward(tmp_inp0, tmp_inp1)
         return inp0, inp1
 
     @staticmethod
     def backward(ctx, grad0: torch.Tensor, grad1: torch.Tensor):
-        tmp_inp0, = ctx.saved_tensors
-        return grad0, tmp_inp0, grad1, torch.zeros_like(tmp_inp0)
+        tmp_inp0, tmp_inp1 = ctx.saved_tensors
+        return grad0, tmp_inp0, grad1, tmp_inp1
 
 
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
