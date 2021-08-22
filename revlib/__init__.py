@@ -8,7 +8,7 @@ QUAD_TENSOR = typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tenso
 class _ReplaceGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, inp0: torch.Tensor, inp1: torch.Tensor, tmp_inp0: torch.Tensor, tmp_inp1: torch.Tensor):
-        ctx.save_for_backward(tmp_inp0, tmp_inp1)
+        ctx.save_for_backward(tmp_inp0.detach(), tmp_inp1.detach())
         return inp0, inp1
 
     @staticmethod
@@ -20,7 +20,7 @@ class _ReplaceGrad(torch.autograd.Function):
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x0: torch.Tensor, back_x0: torch.Tensor, x1: torch.Tensor, back_x1: torch.Tensor,
-                mod: torch.nn.Module, coupling_forward: typing.Callable,
+                mod: typing.Callable, coupling_forward: typing.Callable,
                 coupling_inverse: typing.Callable) -> QUAD_TENSOR:
         ctx.mod = mod
         ctx.coupling_inverse = coupling_inverse
@@ -33,21 +33,15 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
         original_rng_state = torch.get_rng_state()
         torch.set_rng_state(ctx.forward_rng_state)
         with torch.enable_grad():
-            y0 = y0.requires_grad_(True)
+            y0 = y0.requires_grad_()
+            y0.retain_grad()
             out = ctx.mod(y0)
         with torch.no_grad():
             x0 = ctx.coupling_inverse(y1, out.detach())
-        with torch.enable_grad():
-            dx0, *param_grad = torch.autograd.grad(out, (y0,) + tuple(ctx.mod.parameters()), dy1)
-        with torch.no_grad():
-            for p, g in zip(ctx.mod.parameters(), param_grad):
-                if p.grad is None:
-                    p.grad = g
-                else:
-                    p.grad.data.add_(g)
+        torch.autograd.backward(out, dy1)
         torch.set_rng_state(original_rng_state)
         with torch.enable_grad():
-            return dy1.detach(), x0.detach(), dx0.add(dy0).detach(), y0.detach(), None, None, None
+            return dy1.detach(), x0.detach_(), y0.grad.add_(dy0).detach_(), y0.detach_(), None, None, None
 
 
 replace_grad = _ReplaceGrad().apply
