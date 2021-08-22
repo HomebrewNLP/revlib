@@ -1,7 +1,7 @@
+import numpy as np
 import pytest
 import torch
 from torch import nn
-import numpy as np
 
 import revlib
 
@@ -10,7 +10,6 @@ channel_multiplier = 2
 classes = 1000
 
 
-# Create a basic function that's reversibly executed multiple times. (Like f() in ResNet)
 def conv(in_channels, out_channels):
     return nn.Conv2d(in_channels, out_channels, (3, 3), padding=1)
 
@@ -28,7 +27,6 @@ def block():
                          nn.Conv2d(channels, channels, (3, 3), padding=1))
 
 
-# Create a reversible model. f() is invoked depth-times with different weights.
 inp = torch.randn((1, 3, 224, 224)).cuda()
 
 
