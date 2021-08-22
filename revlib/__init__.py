@@ -68,18 +68,20 @@ class ReversibleSequential(torch.nn.Module):
         return self.unpack(key)
 
     def forward(self, inp: torch.Tensor) -> torch.Tensor:
-        self.x0, self.x1 = inp.chunk(2, self.split_dim)
+        x0, x1 = inp.chunk(2, self.split_dim)
         hook = contextlib.nullcontext()
         if self.memory_savings:
+            self.x0, self.x1 = x0, x1
             hook = torch.autograd.graph.saved_tensors_hooks(self.pack, self.unpack)
         for self.idx in range(len(self.module_list)):
             self.mod_idx = self.idx % len(self.coupling_forward)
             self.counter = 0
             self.storage = {}
-            x0, x1 = self.x0, self.x1
             with hook:
                 y1 = self.coupling_forward[self.mod_idx](x0, self.module_list[self.idx](x1))
-            self.x1 = y1
-            self.x0 = x1
-
-        return torch.cat([self.x0, self.x1], dim=self.split_dim)
+            if self.memory_savings:
+                x1 = self.x1 = y1
+                x0 = self.x0 = x1
+            else:
+                x0, x1 = x1, y1
+        return torch.cat([x0, x1], dim=self.split_dim)
