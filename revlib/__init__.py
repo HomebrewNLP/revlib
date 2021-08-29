@@ -8,7 +8,7 @@ QUAD_TENSOR = typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tenso
 class _ReplaceGrad(torch.autograd.Function):
     @staticmethod
     def forward(ctx, inp0: torch.Tensor, inp1: torch.Tensor, tmp_inp0: torch.Tensor, tmp_inp1: torch.Tensor):
-        ctx.save_for_backward(tmp_inp0.detach(), tmp_inp1.detach())
+        ctx.save_for_backward(inp0.detach(), inp1.detach())
         return inp0, inp1
 
     @staticmethod
@@ -44,8 +44,8 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
             return dy1.detach(), x0.detach_(), y0.grad.add_(dy0).detach_(), y0.detach_(), None, None, None
 
 
-replace_grad = _ReplaceGrad().apply
-reverse_and_swap = _ReversibleHalfResidualSwapFn().apply
+replace_grad = _ReplaceGrad.apply
+reverse_and_swap = _ReversibleHalfResidualSwapFn.apply
 
 
 def additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor) -> torch.Tensor:
