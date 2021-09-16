@@ -73,7 +73,10 @@ assert out.size() == (1, 1000, 224, 224)
 
 [MomentumNet](https://arxiv.org/abs/2102.07870) is another recent paper that made significant advancements in the area
 of memory-efficient networks. They propose to use a momentum stream instead of a second model output as illustrated
-below: ![MomentumNetIllustration](http://limitless.sh/momentumnet.png). Implementing that with revlib requires you to
+below: ![MomentumNetIllustration](http://limitless.sh/momentumnet.png)
+<p align="center">Image from <a href=https://twitter.com/PierreAblin/status/1426899071495819265>the plagiarized</a> <a href=https://arxiv.org/abs/2108.05862v2>mRevNet</a></p>
+
+Implementing that with revlib requires you to
 write a custom coupling operation (functional analogue to [MemCNN](https://github.com/silvandeleemput/memcnn)) that
 merges input and output streams.
 
