@@ -112,6 +112,8 @@ out = rev_model(inp)
 assert out.size() == (16, channels * 2, 224, 224)
 ```
 
+When implementing MomentumNet like this, there is no storage for lost information in the forward pass which the MomentumNet paper accounts for. One way to work around that issue is to avoid the coupling function altogether. [HomebrewNLP integrated the coupling functions into f() and g()](https://github.com/HomebrewNLP/HomebrewNLP/blob/efda4b1dbc320c620ed024208f0745b82fb30ebf/src/model.py#L209-L232) which means that there is no loss of information, no matter the depth or beta of the model.
+
 #### Reformer
 
 [Reformer](https://arxiv.org/abs/2001.04451) uses RevNet with chunking and LSH-attention to efficiently train a
