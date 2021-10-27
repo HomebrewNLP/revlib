@@ -1,6 +1,6 @@
 # RevLib
 
-Simple and efficient RevNet-Library with DeepSpeed support
+Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support and parameter offload
 
 ## Table of Contents
 
