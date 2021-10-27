@@ -1,10 +1,19 @@
 import copy
 import typing
 
+import numpy as np
 import torch
 import torch.utils.checkpoint
 
 import revlib
+
+
+def allclose(rtol: float = 1.e-5, atol: float = 1.e-8):
+    def _fn(a: typing.Union[typing.List[typing.Union[int, float]], int, float],
+            b: typing.Union[typing.List[typing.Union[int, float]], int, float]):
+        return np.allclose(a, b, rtol, atol)
+
+    return _fn
 
 
 class BaseTest:

@@ -1,10 +1,9 @@
-import numpy as np
 import pytest
 import torch
 from torch import nn
 
 import revlib
-from backend import RevTest
+from backend import RevTest, allclose
 
 
 class MemTest(RevTest):
@@ -44,4 +43,4 @@ def no_more_memory_with_depth_test(depth: int, factor: int, channels: int, memor
     test.channels = channels
     blocks = [test.block() for _ in range(depth)]
     test(base.revnet(blocks, memory_mode), base.revnet(blocks * factor, memory_mode),
-         comparison=lambda x, y: np.isclose(x, y, rtol=0.1))
+         comparison=lambda x, y: allclose(0.1))
