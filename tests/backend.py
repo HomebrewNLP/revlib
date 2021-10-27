@@ -52,7 +52,7 @@ class BaseTest:
         pass
 
     def revnet(self, blocks, memory_savings=True):
-        memory_mode = revlib.MemoryModes.checkpoint if memory_savings else revlib.MemoryModes.no_savings
+        memory_mode = revlib.MemoryModes.autograd_graph if memory_savings else revlib.MemoryModes.no_savings
         return revlib.ReversibleSequential(*blocks, memory_mode=memory_mode)
 
     def rng_run(self, mod: torch.nn.Module, cpu_state: torch.Tensor,

@@ -160,15 +160,21 @@ class ReversibleModule(torch.nn.Module):
             if key not in self.storage:
                 self.inner_unpack(key)
             return self.storage[key]
-        x0 = self.cache.x0
-        x1 = self.cache.x1
+
+        x1 = self.cache.x0
+        y1 = self.cache.x1
+
         with torch.random.fork_rng(self.cuda_devices):
             torch.set_rng_state(self.cpu_state)
             if self.cuda:
                 torch.utils.checkpoint.set_device_states(self.cuda_devices, self.cuda_states)
             with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
-                    _unused = self.coupling_forward(x0, self.wrapped_module(x1))
+                    out = self.wrapped_module(x1)
+                x0 = self.coupling_inverse(y1, out.detach()).detach_()
+                self.cache(x0, x1.detach())
+                with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
+                    _unused = self.coupling_forward(x0, out)
         return self.unpack(key)
 
     def forward(self, inp: DUAL_OR_QUAD_TENSOR) -> DUAL_OR_QUAD_TENSOR:
@@ -187,10 +193,9 @@ class ReversibleModule(torch.nn.Module):
 
         self.counter = 0
         self.storage = {}
-        self.cache(x0, x1)
         with torch.autograd.graph.saved_tensors_hooks(self.pack, self.unpack):
             y1 = self.coupling_forward(x0, self.wrapped_module(x1))
-        # self.cache(x1, y1)
+        self.cache(x1, y1)
         return x1, y1
 
     def extra_repr(self) -> str:
