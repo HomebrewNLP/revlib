@@ -51,8 +51,7 @@ class BaseTest:
     def compare(self, inp0: typing.Any, inp1: typing.Any):
         pass
 
-    def revnet(self, blocks, memory_savings=True):
-        memory_mode = revlib.MemoryModes.autograd_function if memory_savings else revlib.MemoryModes.no_savings
+    def revnet(self, blocks, memory_mode: revlib.MemoryModes):
         return revlib.ReversibleSequential(*blocks, memory_mode=memory_mode)
 
     def rng_run(self, mod: torch.nn.Module, cpu_state: torch.Tensor,
@@ -61,20 +60,19 @@ class BaseTest:
         torch.utils.checkpoint.set_device_states(*cuda_state)
         return self.run(copy.deepcopy(mod))
 
-    def run_and_compare(self, mod0: torch.nn.Module, mod1: torch.nn.Module, comparison: typing.Callable):
-        mod0 = mod0.cuda()
-        mod1 = mod1.cuda()
+    def run_and_compare(self, *modules: torch.nn.Module, comparison: typing.Callable):
+        modules = [mod.cuda() for mod in modules]
         rng_state = torch.get_rng_state()
         cuda_state = torch.utils.checkpoint.get_device_states(self.inp)
-        assert comparison(self.rng_run(mod0, rng_state, cuda_state), self.rng_run(mod1, rng_state, cuda_state))
+        assert comparison(*(self.rng_run(mod, rng_state, cuda_state) for mod in modules))
 
-    def __call__(self, mod0: torch.nn.Module, mod1: torch.nn.Module, comparison: typing.Callable):
+    def __call__(self, *modules: torch.nn.Module, comparison: typing.Callable):
         pass
 
 
 class RevTest(BaseTest):
-    def __call__(self, mod0: torch.nn.Module, mod1: torch.nn.Module, comparison: typing.Callable):
+    def __call__(self, *modules: torch.nn.Module, comparison: typing.Callable):
         inp_mod = self.rev_input()
         out_mod = self.rev_output()
-        self.run_and_compare(torch.nn.Sequential(inp_mod, mod0, out_mod), torch.nn.Sequential(inp_mod, mod1, out_mod),
-                             comparison)
+
+        self.run_and_compare(*(torch.nn.Sequential(inp_mod, mod, out_mod) for mod in modules), comparison=comparison)

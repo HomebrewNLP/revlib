@@ -4,6 +4,7 @@ import numpy as np
 import pytest
 import torch
 
+import revlib
 from backend import RevTest
 
 
@@ -21,9 +22,13 @@ class GradTest(RevTest):
 base = GradTest()
 
 
+def n_close(*args):
+    baseline = args[0]
+    return all(np.allclose(baseline, arg) for arg in args[1:])
+
+
 @pytest.mark.parametrize("depth", [1, 8])
 @pytest.mark.parametrize("weight_sharing", [True, False])
 def same_gradients_without_memory_savings_test(depth: int, weight_sharing: bool):
     blocks = ([base.block()] * depth) if weight_sharing else [base.block() for _ in range(depth)]
-    base(base.revnet(blocks, False), base.revnet(blocks, True), np.allclose)
-
+    base(*(base.revnet(blocks, mode) for mode in revlib.MemoryModes), comparison=n_close)
