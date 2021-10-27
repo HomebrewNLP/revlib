@@ -18,14 +18,14 @@ class MemoryModes(enum.IntEnum):
 
 class _ReplaceGrad(torch.autograd.Function):
     @staticmethod
-    def forward(ctx, inp0: torch.Tensor, tmp_inp0: torch.Tensor, inp1: torch.Tensor, tmp_inp1: torch.Tensor):
+    def forward(ctx, inp0: torch.Tensor, inp1: torch.Tensor, tmp_inp0: torch.Tensor, tmp_inp1: torch.Tensor):
         ctx.save_for_backward(inp0.detach(), inp1.detach())
         return inp0, inp1
 
     @staticmethod
     def backward(ctx, grad0: torch.Tensor, grad1: torch.Tensor):
         tmp_inp0, tmp_inp1 = ctx.saved_tensors
-        return grad0, tmp_inp0, grad1, tmp_inp1
+        return grad0, grad1, tmp_inp0, tmp_inp1
 
 
 def _set_device(mod: torch.nn.Module, device: str) -> torch.nn.Module:
@@ -57,17 +57,16 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
         if ctx.cuda:
             original_cuda_state = torch.utils.checkpoint.get_device_states(dy0, dy1, y0, y1)
             torch.utils.checkpoint.set_device_states(ctx.cuda_devices, ctx.cuda_states)
-
         with torch.enable_grad():
-            y0 = y0.requires_grad_()
+            y0 = y0.detach().requires_grad_()
             y0.retain_grad()
             new_mod = _set_device(ctx.mod, ctx.target_device)
             mod_out = new_mod(y0)
         with torch.no_grad():
-            x0 = ctx.coupling_inverse(y1, mod_out.detach())
-        # with torch.enable_grad():
-        #    out = ctx.coupling_forward(x0, mod_out)
-        torch.autograd.backward(mod_out, dy1)
+            x0 = ctx.coupling_inverse(y1, mod_out.detach()).detach()
+        with torch.enable_grad():
+            out = ctx.coupling_forward(x0, mod_out)
+        torch.autograd.backward(out, dy1)
         if ctx.target_device:
             with torch.no_grad():
                 for p, new_p in zip(ctx.mod.parameters(), new_mod.parameters()):
@@ -82,8 +81,8 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
             torch.utils.checkpoint.set_device_states(*original_cuda_state)
         torch.set_rng_state(original_rng_state)
         with torch.enable_grad():
-            return (dy1.detach(), ctx.coupling_forward(dy0, y0.grad).detach_(), x0.detach(), y0.detach(),
-                    None, None, None, None)
+            return (dy1.detach(), ctx.coupling_forward(dy0, y0.grad).detach_(), x0, y0,
+                    None, None, None, None, None)
 
 
 class TensorOffload(torch.autograd.Function):
@@ -184,7 +183,6 @@ class ReversibleModule(torch.nn.Module):
             self.cuda_devices, self.cuda_states = torch.utils.checkpoint.get_device_states(*inp)
 
         if not self.memory_savings:
-            print("no mem")
             return x1, self.coupling_forward(x0, self.wrapped_module(x1))
 
         if self.cache is None:
