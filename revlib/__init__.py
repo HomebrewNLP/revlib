@@ -114,8 +114,8 @@ class ReversibleModuleCache:
     x1: torch.Tensor
 
     def __call__(self, x0: torch.Tensor, x1: torch.Tensor):
-        self.x0 = x0
-        self.x1 = x1
+        self.x0 = x0.detach()
+        self.x1 = x1.detach()
 
 
 class ReversibleModule(torch.nn.Module):
