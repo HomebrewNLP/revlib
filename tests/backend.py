@@ -10,7 +10,7 @@ import revlib
 class BaseTest:
     def __init__(self):
         self.input_channels = 3
-        self.inp = torch.randn((1, self.input_channels, 16, 16)).cuda()
+        self.inp = torch.randn((1, self.input_channels, 224, 224)).cuda()
         self.classes = 5
         self.dropout = 0.2
         self.conv_kernel = 3
@@ -56,6 +56,7 @@ class BaseTest:
 
     def rng_run(self, mod: torch.nn.Module, cpu_state: torch.Tensor,
                 cuda_state: typing.Tuple[typing.List[int], typing.List[torch.Tensor]]):
+        torch.cuda.empty_cache()
         torch.set_rng_state(cpu_state)
         torch.utils.checkpoint.set_device_states(*cuda_state)
         return self.run(copy.deepcopy(mod))
