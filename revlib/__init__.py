@@ -1,5 +1,5 @@
-import copy
 import contextlib
+import copy
 import typing
 
 import torch
@@ -95,17 +95,23 @@ def additive_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor) -> tor
 
 class ReversibleModule(torch.nn.Module):
     def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Optional[typing.Callable] = None,
-                 coupling_inverse: typing.Optional[typing.Callable] = None,
-                 target_device: str = ""):
+                 coupling_inverse: typing.Optional[typing.Callable] = None, memory_savings: bool = True,
+                 autograd_function: bool = True, target_device: str = ""):
         super(ReversibleModule, self).__init__()
         self.wrapped_module = wrapped_module
         self.target_device = target_device
         self.coupling_forward = coupling_forward or additive_coupling_forward
         self.coupling_inverse = coupling_inverse or additive_coupling_inverse
+        self.memory_savings = memory_savings
+        self.autograd_function = autograd_function
 
     def forward(self, inp: QUAD_TENSOR) -> QUAD_TENSOR:
-        return reverse_and_swap(*inp, self.wrapped_module, self.coupling_forward, self.coupling_inverse,
-                                self.target_device)
+        x0, back_x0, x1, back_x1 = inp
+        if not self.memory_savings:
+            return (x1, back_x0,
+                    self.coupling_forward(x0, _set_device(self.wrapped_module, self.target_device)(x1)), back_x1)
+        return reverse_and_swap(x0, back_x0, x1, back_x1, self.wrapped_module, self.coupling_forward,
+                                self.coupling_inverse, self.target_device)
 
     def extra_repr(self) -> str:
         return '\n'.join([f'coupling_forward={self.coupling_forward.__name__}',
@@ -117,6 +123,8 @@ class ReversibleSequential(torch.nn.Module):
     def __init__(self, *modules, split_dim=1,
                  coupling_forward: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
                  coupling_inverse: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
+                 memory_savings: bool = True,
+                 autograd_function: bool = True,
                  target_device: str = ""):
         super(ReversibleSequential, self).__init__()
         coupling_forward = list(coupling_forward) if coupling_forward else [None]
@@ -125,7 +133,9 @@ class ReversibleSequential(torch.nn.Module):
                                           ReversibleModule(m,
                                                            coupling_forward[i % len(coupling_forward)],
                                                            coupling_inverse[i % len(coupling_inverse)],
-                                                           target_device)
+                                                           memory_savings,
+                                                           target_device
+                                                           )
                                           for i, m in enumerate(modules)])
         self.split_dim = split_dim
 
