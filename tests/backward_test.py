@@ -15,8 +15,7 @@ class GradTest(RevTest):
     def run(self, mod: torch.nn.Module):
         out = mod(self.inp)
         out.mean().backward()
-        p = next(iter(mod.parameters()))
-        return [r(p.grad).item() for r in self.reductions]
+        return [r(p.grad).item() for p in mod.parameters() for r in self.reductions]
 
 
 base = GradTest()

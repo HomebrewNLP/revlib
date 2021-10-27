@@ -2,6 +2,7 @@ import copy
 import typing
 
 import torch
+import torch.utils.checkpoint
 
 import revlib
 
@@ -9,7 +10,7 @@ import revlib
 class BaseTest:
     def __init__(self):
         self.input_channels = 3
-        self.inp = torch.randn((1, self.input_channels, 224, 224)).cuda()
+        self.inp = torch.randn((1, self.input_channels, 16, 16)).cuda()
         self.classes = 5
         self.dropout = 0.2
         self.conv_kernel = 3
@@ -24,7 +25,7 @@ class BaseTest:
     def block_conv(self, in_channels, out_channels):
         return torch.nn.Sequential(self.conv(in_channels, out_channels),
                                    torch.nn.Dropout(self.dropout),
-                                   torch.nn.BatchNorm2d(out_channels),
+                                   torch.nn.BatchNorm2d(out_channels, track_running_stats=False),
                                    torch.nn.ReLU())
 
     def block(self):
@@ -51,12 +52,21 @@ class BaseTest:
         pass
 
     def revnet(self, blocks, memory_savings=True):
-        return revlib.ReversibleSequential(*blocks, memory_savings=memory_savings)
+        memory_mode = revlib.MemoryModes.checkpoint if memory_savings else revlib.MemoryModes.no_savings
+        return revlib.ReversibleSequential(*blocks, memory_mode=memory_mode)
+
+    def rng_run(self, mod: torch.nn.Module, cpu_state: torch.Tensor,
+                cuda_state: typing.Tuple[typing.List[int], typing.List[torch.Tensor]]):
+        torch.set_rng_state(cpu_state)
+        torch.utils.checkpoint.set_device_states(*cuda_state)
+        return self.run(copy.deepcopy(mod))
 
     def run_and_compare(self, mod0: torch.nn.Module, mod1: torch.nn.Module, comparison: typing.Callable):
         mod0 = mod0.cuda()
         mod1 = mod1.cuda()
-        assert comparison(self.run(copy.deepcopy(mod0)), self.run(copy.deepcopy(mod1)))
+        rng_state = torch.get_rng_state()
+        cuda_state = torch.utils.checkpoint.get_device_states(self.inp)
+        assert comparison(self.rng_run(mod0, rng_state, cuda_state), self.rng_run(mod1, rng_state, cuda_state))
 
     def __call__(self, mod0: torch.nn.Module, mod1: torch.nn.Module, comparison: typing.Callable):
         pass
