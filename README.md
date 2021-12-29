@@ -16,6 +16,7 @@ Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support a
         * [Models](#models)
             * [iRevNet](#irevnet)
             * [Reformer](#reformer)
+        * [Utils](#utils)
     * [Explanation](#explanation)
 
 ## Features
@@ -167,7 +168,8 @@ assert out.size() == (16, channels * 2, 224, 224)
 When implementing MomentumNet like this, there is no storage for lost information in the forward pass which the
 MomentumNet paper accounts for. One way to work around that issue is to avoid the coupling function
 altogether. [HomebrewNLP integrated the coupling functions into f() and g()](https://github.com/HomebrewNLP/HomebrewNLP/blob/efda4b1dbc320c620ed024208f0745b82fb30ebf/src/model.py#L209-L232)
-which means that there is no loss of information, no matter the depth or beta of the model.
+which means that there is no loss of information, no matter the depth or beta of the model. The same integrated
+MomentumNet is available via the [utils module](#utils).
 
 #### Models
 
@@ -259,6 +261,50 @@ classes = 16
 model = Reformer(sequence, 256, 6, 8, output_classes=classes)
 out = model(torch.ones((16, sequence), dtype=torch.long))
 assert out.size() == (16, sequence, classes)
+```
+
+#### Utils
+
+RevLib also has its own `utils` module which provides helpful functions as `residual_to_momentum_net`. Using RevLib, you
+can trivially convert any HuggingFace transformer into a MomentumNet without significant loss of performance. Especially
+during fine-tuning, this can be a life-saver, as it allows for significantly bigger models to fit into memory without
+the need to manually (or [automatically](https://arxiv.org/abs/2006.09616)) create countless buffers for activation
+checkpointing.\
+With the addition of `MomentumNet`, there is one more hyperparameter to tune. Small values of `beta` allow the model to
+continue functioning as normal:
+
+```PYTHON
+from transformers import AutoModelForCausalLM, GPT2TokenizerFast
+from revlib.utils import module_list_to_momentum_net
+
+tokenizer = GPT2TokenizerFast.from_pretrained('gpt2')
+tokens = tokenizer(["The shadowy hacker group Eleuther"], return_tensors='pt')['input_ids']
+model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-2.7B")
+original_layers = model.transformer.h
+print(tokenizer.decode(model.generate(input_ids=tokens)[0]))
+# The shadowy hacker group Eleutheria has been busy for the past few months. The group has been
+
+model.transformer.h = module_list_to_momentum_net(original_layers, residual=True, beta=0.1)
+print(tokenizer.decode(model.generate(input_ids=tokens)[0]))
+# The shadowy hacker group Eleutheria has been busy for the past few months. The group has been
+```
+
+On the other hand, large values improve numerical stability of deep networks at the cost of slightly altering the
+information flow.
+
+```PYTHON
+model.transformer.h = module_list_to_momentum_net(original_layers, residual=True, beta=0.5)
+print(tokenizer.decode(model.generate(input_ids=tokens)[0]))
+# The shadowy hacker group Eleutherian psi- psi- psi- psi psi psi psi psi psi psi
+```
+
+Either way, both can be used to train the models just the same as you're used to! While the gradients might differ
+between models, there is no performance degradation after fine-tuning.
+
+```PYTHON
+model(tokens)[0].mean().backward()
+print(next(iter(model.parameters())).grad.mean().item())
+# -7.596428730494154e-08
 ```
 
 ## Explanation

@@ -10,7 +10,7 @@ setuptools.setup(
     name='revlib',
     license='BSD',
     description='Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support and parameter offload',
-    version='v1.2.0',
+    version='v1.3.0',
     long_description=README,
     url='https://github.com/clashluke/revlib',
     packages=setuptools.find_packages(),
