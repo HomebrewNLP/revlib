@@ -219,7 +219,6 @@ class ReversibleModule(torch.nn.Module):
             self.cache(x1, y1)
         else:
             self.cache(x1, out[0])
-        self.cache(x1, y1)
         return x1, y1
 
     def extra_repr(self) -> str:
