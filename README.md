@@ -21,11 +21,10 @@ Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support a
 
 ## Features
 
-* Half the constant memory usage and faster than RevNet libraries
-* Less memory than gradient checkpointing (`1 * output_size` instead of `n_layers * output_size`)
+* Less memory than gradient checkpointing (`2 * output_size` instead of `n_layers * output_size`)
 * Same speed as activation checkpointing
 * Extensible
-* Trivial code (<100 Lines)
+* Native HuggingFace, DeepSpeed, and XLA support
 
 ## Getting started
 
@@ -306,6 +305,47 @@ model(tokens)[0].mean().backward()
 print(next(iter(model.parameters())).grad.mean().item())
 # -7.596428730494154e-08
 ```
+
+As expected, the memory consumption for the modified model is significantly lower during training than that of
+non-checkpointed model:
+
+```PYTHON
+import time
+import torch
+from transformers import AutoModelForCausalLM
+from memory_profiler import memory_usage
+
+model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-2.7B")
+tokens = torch.zeros((4, 2048), dtype=torch.long)
+base = max(memory_usage((lambda: None,)))
+start_time = time.time()
+memory = max(memory_usage((lambda: model(tokens)[0].mean().backward(),)))
+print(time.time() - start_time)
+# 206.94576001167297
+print(memory - max(memory_usage((lambda: None,))))
+# 150272.09765625
+```
+
+```PYTHON
+import time
+import torch
+from transformers import AutoModelForCausalLM
+from revlib.utils import module_list_to_momentum_net
+from memory_profiler import memory_usage
+
+model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-2.7B")
+model.transformer.h = module_list_to_momentum_net(model.transformer.h, residual=True, beta=0.5)  # The only difference
+tokens = torch.zeros((4, 2048), dtype=torch.long)
+start_time = time.time()
+memory = max(memory_usage((lambda: model(tokens)[0].mean().backward(),)))
+print(time.time() - start_time)
+# 275.42114186286926
+print(memory - max(memory_usage((lambda: None,))))
+# 6187.0703125
+```
+
+Note that the model is also faster, even though it only used up to 160/250GiB, which might be due to decreasing
+performance with higher caches and bigger graphs.
 
 ## Explanation
 
