@@ -2,7 +2,7 @@ import typing
 
 import torch.utils.checkpoint
 
-from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, take_0th_tensor, MergeCalls
+from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, split_tensor_list, MergeCalls
 
 
 class MomentumNetSide(torch.nn.Module):
@@ -30,7 +30,7 @@ class ResidualToPlain(torch.nn.Module):
         self.wrapped_module = wrapped_module
 
     def forward(self, inp: torch.Tensor, *args, **kwargs) -> typing.Union[typing.List[torch.Tensor], torch.Tensor]:
-        out = take_0th_tensor(self.wrapped_module(inp, *args, **kwargs))
+        out = split_tensor_list(self.wrapped_module(inp, *args, **kwargs))
         if isinstance(out, torch.Tensor):
             return out - inp
         return [out[0] - inp] + out[1]
@@ -99,13 +99,14 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
                        coupling_inverse=coupling_inverse, memory_mode=memory_mode, target_device=target_device,
                        beta=beta)
     secondary_branch_buffer = []
+    stem = list(net.stem)[:-1]  # Drop last `MomentumNetSide`
     modules = [SingleBranchReversibleModule(secondary_branch_buffer, wrapped_module=mod.wrapped_module,
                                             coupling_forward=mod.coupling_forward,
                                             coupling_inverse=mod.coupling_inverse,
                                             memory_savings=mod.memory_savings, target_device=mod.target_device,
-                                            cache=mod.cache, first=idx == 0)
-               for idx, mod in enumerate(net.stem)]
+                                            cache=mod.cache, first=idx == 0, last=idx == len(stem) - 1)
+               for idx, mod in enumerate(stem)]
     out_modules = [MergeCalls(modules[i], modules[i + 1], collate_fn=lambda y, x: [y] + x[0][1:])
                    for i in range(0, len(modules) - 2, 2)]
-    out_modules.append(MergeCalls(modules[-2], modules[-1], collate_fn=lambda _, x: x[0]))
+    out_modules.append(modules[-1])
     return torch.nn.ModuleList(out_modules)

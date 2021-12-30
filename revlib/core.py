@@ -34,8 +34,8 @@ def _set_device(mod: torch.nn.Module, device: str) -> torch.nn.Module:
     return copy.deepcopy(mod).to(device, non_blocking=True)
 
 
-def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tensor]
-                    ) -> typing.Union[typing.Tuple[torch.Tensor, typing.List[torch.Tensor]], torch.Tensor]:
+def split_tensor_list(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tensor]
+                      ) -> typing.Union[typing.Tuple[torch.Tensor, typing.List[torch.Tensor]], torch.Tensor]:
     if isinstance(inp, torch.Tensor):
         return inp
     if isinstance(inp, typing.Iterable):
@@ -44,11 +44,18 @@ def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tenso
     ValueError(f"Unsupported Type {type(inp)}")
 
 
+def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tensor]) -> torch.Tensor:
+    out = split_tensor_list(inp)
+    if not isinstance(out, torch.Tensor):
+        return out[0]
+    return inp
+
+
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x0: torch.Tensor, x1: torch.Tensor, back_x0: torch.Tensor, back_x1: torch.Tensor,
                 mod: torch.nn.Module, coupling_forward: typing.Callable, coupling_inverse: typing.Callable,
-                target_device: str, cuda: bool, args: typing.Iterable, kwargs: dict) -> DUAL_OR_QUAD_TENSOR:
+                target_device: str, cuda: bool, args: typing.Iterable, kwargs: dict):
         ctx.mod = mod
         ctx.target_device = target_device
         ctx.coupling_forward = coupling_forward
@@ -59,13 +66,24 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
         ctx.kwargs = kwargs
         if cuda:
             ctx.cuda_devices, ctx.cuda_states = torch.utils.checkpoint.get_device_states(x0, x1, back_x0, back_x1)
-        return x1, coupling_forward(x0, _set_device(mod, target_device)(x1, *args, **kwargs)), back_x0, back_x1
+        out = _set_device(mod, target_device)(x1, *args, **kwargs)
+        out = split_tensor_list(out)
+        if isinstance(out, torch.Tensor):
+            residual = None
+        else:
+            residual = out[1]
+            out = out[0]
+        return x1, coupling_forward(x0, out), back_x0, back_x1, residual
 
     @staticmethod
-    def backward(ctx, dy0: torch.Tensor, dy1: torch.Tensor, y0: torch.Tensor, y1: torch.Tensor
+    def backward(ctx, dy0: torch.Tensor, dy1: torch.Tensor, y0: torch.Tensor, y1: torch.Tensor, _unused
                  ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None]:
         original_rng_state = torch.get_rng_state()
         torch.set_rng_state(ctx.forward_rng_state)
+        if dy0 is not None:
+            dy0 = torch.zeros_like(dy0)
+        if dy1 is not None:
+            dy1 = torch.zeros_like(y0)
         if ctx.cuda:
             original_cuda_state = torch.utils.checkpoint.get_device_states(dy0, dy1, y0, y1)
             torch.utils.checkpoint.set_device_states(ctx.cuda_devices, ctx.cuda_states)
@@ -73,7 +91,7 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
             y0 = y0.detach().requires_grad_()
             y0.retain_grad()
             new_mod = _set_device(ctx.mod, ctx.target_device)
-            mod_out = new_mod(y0, *ctx.args, **ctx.kwargs)
+            mod_out = take_0th_tensor(new_mod(y0, *ctx.args, **ctx.kwargs))
         with torch.no_grad():
             x0 = ctx.coupling_inverse(y1, mod_out.detach()).detach()
         with torch.enable_grad():
@@ -93,8 +111,8 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
             torch.utils.checkpoint.set_device_states(*original_cuda_state)
         torch.set_rng_state(original_rng_state)
         with torch.enable_grad():
-            return (dy1.detach(), ctx.coupling_forward(dy0, y0.grad).detach_(), x0, y0,
-                    None, None, None, None, None)
+            out_grad = ctx.coupling_forward(dy0, y0.grad).detach_()
+            return dy1.detach(), out_grad, x0, y0, None, None, None, None, None, None, None
 
 
 class TensorOffload(torch.autograd.Function):
@@ -115,7 +133,7 @@ reverse_and_swap = _ReversibleHalfResidualSwapFn.apply
 
 def additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor
                               ) -> typing.Union[typing.List[torch.Tensor], torch.Tensor]:
-    fn_out = take_0th_tensor(fn_out)
+    fn_out = split_tensor_list(fn_out)
     if isinstance(fn_out, torch.Tensor):
         return other_stream + fn_out
     return [other_stream + fn_out[0]] + fn_out[1]
@@ -123,7 +141,7 @@ def additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor
 
 def additive_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor
                               ) -> typing.Union[typing.List[torch.Tensor], torch.Tensor]:
-    fn_out = take_0th_tensor(fn_out)
+    fn_out = split_tensor_list(fn_out)
     if isinstance(fn_out, torch.Tensor):
         return output - fn_out
     return [output - fn_out[0]] + fn_out[1]
@@ -192,10 +210,7 @@ class ReversibleModule(torch.nn.Module):
             with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                     out = self.wrapped_module(x1, *self.input_args, **self.input_kwargs)
-                out = take_0th_tensor(out)
-                if not isinstance(out, torch.Tensor):
-                    out = out[0]
-                x0 = self.coupling_inverse(y1, out.detach()).detach_()
+                x0 = self.coupling_inverse(y1, take_0th_tensor(out).detach()).detach_()
                 self.cache(x0, x1)
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                     _unused = self.coupling_forward(x0, out)
@@ -211,15 +226,18 @@ class ReversibleModule(torch.nn.Module):
             return x1, self.coupling_forward(x0, self.wrapped_module(x1, *args, **kwargs))
 
         if self.cache is None:
-            return reverse_and_swap(x0, x1, *back, self.wrapped_module, self.coupling_forward,
-                                    self.coupling_inverse, self.target_device, self.cuda, args, kwargs)
+            x0, x1, y0, y1, res = reverse_and_swap(x0, x1, *back, self.wrapped_module, self.coupling_forward,
+                                                   self.coupling_inverse, self.target_device, self.cuda, args, kwargs)
+            if res is not None:
+                x1 = [x1] + res
+            return x0, x1, y0, y1
 
         self.counter = 0
         self.storage = {}
         with torch.autograd.graph.saved_tensors_hooks(self.pack, self.unpack):
             y1 = self.coupling_forward(x0, self.wrapped_module(x1, *args, **kwargs))
 
-        out = take_0th_tensor(y1)
+        out = split_tensor_list(y1)
         self.input_args = args
         self.input_kwargs = kwargs
         if not isinstance(out, torch.Tensor):
@@ -239,7 +257,8 @@ class SingleBranchReversibleModule(ReversibleModule):
                  coupling_inverse: typing.Optional[typing.Callable] = None, memory_savings: bool = True,
                  cache: typing.Optional[ReversibleModuleCache] = None,
                  target_device: str = "",
-                 first: bool = False):
+                 first: bool = False,
+                 last: bool = False):
         super(SingleBranchReversibleModule, self).__init__(wrapped_module=wrapped_module,
                                                            coupling_forward=coupling_forward,
                                                            coupling_inverse=coupling_inverse,
@@ -248,6 +267,7 @@ class SingleBranchReversibleModule(ReversibleModule):
                                                            target_device=target_device)
         self.secondary_branch_buffer = secondary_branch_buffer
         self.first = first
+        self.last = last
 
     def forward(self, x1: torch.Tensor, *args, **kwargs) -> torch.Tensor:
         if self.first:
@@ -257,7 +277,16 @@ class SingleBranchReversibleModule(ReversibleModule):
         else:
             x0, *back = self.secondary_branch_buffer.pop()
         _, y1, *back = super(SingleBranchReversibleModule, self).forward((x0, x1, *back), *args, **kwargs)
-        self.secondary_branch_buffer.append([x1] + back)
+        if self.last:
+            if self.memory_savings and self.cache is None:
+                out = out0 = split_tensor_list(y1)
+                if not isinstance(out0, torch.Tensor):
+                    out = out0[0]
+                _, out = replace_grad(x1, out, *back)
+                if not isinstance(out0, torch.Tensor):
+                    y1 = [out] + out0[1]
+        else:
+            self.secondary_branch_buffer.append([x1] + back)
         return y1
 
 
@@ -271,7 +300,7 @@ class MergeCalls(torch.nn.Module):
         out = []
         for mod in self.wrapped_modules:
             inp = mod(inp, *args, **kwargs)
-            inp = take_0th_tensor(inp)
+            inp = split_tensor_list(inp)
             if not isinstance(inp, torch.Tensor):
                 out.append([inp[0]] + inp[1])
                 inp = inp[0]
