@@ -36,11 +36,11 @@ def _set_device(mod: torch.nn.Module, device: str) -> torch.nn.Module:
 
 def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tensor]
                     ) -> typing.Union[typing.Tuple[torch.Tensor, typing.List[torch.Tensor]], torch.Tensor]:
+    if isinstance(inp, torch.Tensor):
+        return inp
     if isinstance(inp, typing.Iterable):
         inp = list(inp)
         return inp[0], inp[1:]
-    if isinstance(inp, torch.Tensor):
-        return inp[0]
     ValueError(f"Unsupported Type {type(inp)}")
 
 
@@ -190,8 +190,12 @@ class ReversibleModule(torch.nn.Module):
             with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                     out = self.wrapped_module(x1)
-                x0 = self.coupling_inverse(y1, out.detach()).detach_()
-                self.cache(x0, x1.detach())
+                if isinstance(take_0th_tensor(x1), torch.Tensor):
+                    x0 = self.coupling_inverse(y1, out.detach()).detach_()
+                    self.cache(x0, x1)
+                else:
+                    x0 = self.coupling_inverse(y1, out[0].detach()).detach_()
+                    self.cache(x0, x1[0])
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                     _unused = self.coupling_forward(x0, out)
         return self.unpack(key)
