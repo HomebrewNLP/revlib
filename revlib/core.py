@@ -159,6 +159,8 @@ class ReversibleModule(torch.nn.Module):
 
         self.counter: int = 0
         self.storage: typing.Dict[str, torch.Tensor] = {}
+        self.input_args = []
+        self.input_kwargs = {}
 
     def get_key(self, idx: int, inp: torch.Tensor):
         key = f'Index: {idx}\nSize: {inp.size()}\nDevice: {inp.device}\nDataType: {inp.dtype}'
@@ -189,13 +191,12 @@ class ReversibleModule(torch.nn.Module):
                 torch.utils.checkpoint.set_device_states(self.cuda_devices, self.cuda_states)
             with torch.enable_grad(), torch.cuda.amp.autocast(self.autocast):
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
-                    out = self.wrapped_module(x1)
-                if isinstance(take_0th_tensor(x1), torch.Tensor):
-                    x0 = self.coupling_inverse(y1, out.detach()).detach_()
-                    self.cache(x0, x1)
-                else:
-                    x0 = self.coupling_inverse(y1, out[0].detach()).detach_()
-                    self.cache(x0, x1[0])
+                    out = self.wrapped_module(x1, *self.input_args, **self.input_kwargs)
+                out = take_0th_tensor(out)
+                if not isinstance(out, torch.Tensor):
+                    out = out[0]
+                x0 = self.coupling_inverse(y1, out.detach()).detach_()
+                self.cache(x0, x1)
                 with torch.autograd.graph.saved_tensors_hooks(self.inner_pack, self.inner_unpack):
                     _unused = self.coupling_forward(x0, out)
         return self.unpack(key)
@@ -219,10 +220,11 @@ class ReversibleModule(torch.nn.Module):
             y1 = self.coupling_forward(x0, self.wrapped_module(x1, *args, **kwargs))
 
         out = take_0th_tensor(y1)
-        if isinstance(out, torch.Tensor):
-            self.cache(x1, y1)
-        else:
-            self.cache(x1, out[0])
+        self.input_args = args
+        self.input_kwargs = kwargs
+        if not isinstance(out, torch.Tensor):
+            out = out[0]
+        self.cache(x1, out)
         return x1, y1
 
     def extra_repr(self) -> str:
@@ -255,11 +257,7 @@ class SingleBranchReversibleModule(ReversibleModule):
         else:
             x0, *back = self.secondary_branch_buffer.pop()
         _, y1, *back = super(SingleBranchReversibleModule, self).forward((x0, x1, *back), *args, **kwargs)
-        out = take_0th_tensor(y1)
-        if isinstance(out, torch.Tensor):
-            self.secondary_branch_buffer.append([x1] + back)
-        else:
-            self.secondary_branch_buffer.append([x1] + back)
+        self.secondary_branch_buffer.append([x1] + back)
         return y1
 
 
