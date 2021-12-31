@@ -306,7 +306,7 @@ print(next(iter(model.parameters())).grad.mean().item())
 # -7.596428730494154e-08
 ```
 
-As expected, the memory consumption for the modified model is significantly lower during training than that of
+As expected, the memory consumption for the modified model is significantly lower during training than that of a
 non-checkpointed model:
 
 ```PYTHON
@@ -343,9 +343,6 @@ print(time.time() - start_time)
 print(memory - max(memory_usage((lambda: None,))))
 # 6187.0703125
 ```
-
-Note that the model is also faster, even though it only used up to 160/250GiB, which might be due to decreasing
-performance with higher caches and bigger graphs.
 
 ## Explanation
 
