@@ -80,9 +80,9 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
                  ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None]:
         original_rng_state = torch.get_rng_state()
         torch.set_rng_state(ctx.forward_rng_state)
-        if dy0 is not None:
-            dy0 = torch.zeros_like(dy0)
-        if dy1 is not None:
+        if dy0 is None:
+            dy0 = torch.zeros_like(y0)
+        if dy1 is None:
             dy1 = torch.zeros_like(y0)
         if ctx.cuda:
             original_cuda_state = torch.utils.checkpoint.get_device_states(dy0, dy1, y0, y1)
