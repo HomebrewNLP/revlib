@@ -36,6 +36,32 @@ class ResidualToPlain(torch.nn.Module):
         return [out[0] - inp] + out[1]
 
 
+def apply_tree(obj, fn: typing.Callable[[typing.Any], typing.Any]):
+    if hasattr(obj, '__dict__'):
+        obj.__dict__ = apply_tree(obj.__dict__, fn)
+    if isinstance(obj, dict):
+        return dict(zip(apply_tree(list(obj.keys()), fn), apply_tree(list(obj.values()), fn)))
+    if isinstance(obj, (tuple, list)):
+        return type(obj)([apply_tree(o, fn) for o in obj])
+    return fn(obj)
+
+
+def detached_additive_coupling_forward(other_stream: torch.Tensor, fn_out: torch.Tensor
+                                       ) -> typing.Union[typing.List[torch.Tensor], torch.Tensor]:
+    fn_out = split_tensor_list(fn_out)
+    if isinstance(fn_out, torch.Tensor):
+        return other_stream + fn_out
+    return [other_stream + fn_out[0]] + apply_tree(fn_out[1], torch.detach)
+
+
+def detached_additive_coupling_inverse(output: torch.Tensor, fn_out: torch.Tensor
+                                       ) -> typing.Union[typing.List[torch.Tensor], torch.Tensor]:
+    fn_out = split_tensor_list(fn_out)
+    if isinstance(fn_out, torch.Tensor):
+        return output - fn_out
+    return [output - fn_out[0]] + apply_tree(fn_out[1], torch.detach)
+
+
 def momentum_net(*modules, split_dim=1,
                  coupling_forward: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,
                  coupling_inverse: typing.Optional[typing.List[typing.Optional[typing.Callable]]] = None,

@@ -317,7 +317,6 @@ from memory_profiler import memory_usage
 
 model = AutoModelForCausalLM.from_pretrained("EleutherAI/gpt-neo-2.7B")
 tokens = torch.zeros((4, 2048), dtype=torch.long)
-base = max(memory_usage((lambda: None,)))
 start_time = time.time()
 memory = max(memory_usage((lambda: model(tokens)[0].mean().backward(),)))
 print(time.time() - start_time)
