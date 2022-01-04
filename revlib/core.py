@@ -61,11 +61,11 @@ class ReversibleWrapper(torch.nn.Module):
         self.coupling_forward = coupling_forward or additive_coupling_forward
         self.coupling_inverse = coupling_inverse or additive_coupling_inverse
 
-    def forward(self, x0: torch.Tensor, x1: torch.Tensor) -> TENSOR_OR_LIST:
-        return self.coupling_forward(x0, self.wrapped_module(x1))
+    def forward(self, x0: torch.Tensor, x1: torch.Tensor, *args, **kwargs) -> TENSOR_OR_LIST:
+        return self.coupling_forward(x0, self.wrapped_module(x1, *args, **kwargs))
 
-    def inverse(self, y0: torch.Tensor, y1: torch.Tensor) -> TENSOR_OR_LIST:
-        return self.coupling_inverse(y1, self.wrapped_module(y0))
+    def inverse(self, y0: torch.Tensor, y1: torch.Tensor, *args, **kwargs) -> TENSOR_OR_LIST:
+        return self.coupling_inverse(y1, self.wrapped_module(y0, *args, **kwargs))
 
 
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
