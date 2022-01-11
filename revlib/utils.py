@@ -125,7 +125,7 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
                        coupling_inverse=coupling_inverse, memory_mode=memory_mode, target_device=target_device,
                        beta=beta)
     secondary_branch_buffer = []
-    stem = list(net.stem)[:-1]  # Drop last `MomentumNetSide`
+    stem = list(net)[:-1]  # Drop last `MomentumNetSide`
     modules = [SingleBranchReversibleModule(secondary_branch_buffer, wrapped_module=mod.wrapped_module.wrapped_module,
                                             coupling_forward=mod.wrapped_module.coupling_forward,
                                             coupling_inverse=mod.wrapped_module.coupling_inverse,

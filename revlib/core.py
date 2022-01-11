@@ -320,7 +320,7 @@ class MergeCalls(torch.nn.Module):
         return self.collate_fn(inp, out)
 
 
-class ReversibleSequential(torch.nn.Module):
+class ReversibleSequential(torch.nn.Sequential):
     def __init__(self, *modules, split_dim=1,
                  coupling_forward: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
                  coupling_inverse: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
@@ -332,20 +332,35 @@ class ReversibleSequential(torch.nn.Module):
         memory_savings = memory_mode != MemoryModes.no_savings
         cache = ReversibleModuleCache() if memory_mode in (MemoryModes.checkpoint, MemoryModes.autograd_graph) else None
         self.replace_grad = replace_grad if memory_mode == MemoryModes.autograd_function else lambda *x: x
-        self.stem = torch.nn.Sequential(*[m if isinstance(m, ReversibleModule) else
-                                          ReversibleModule(m,
-                                                           coupling_forward[i % len(coupling_forward)],
-                                                           coupling_inverse[i % len(coupling_inverse)],
-                                                           memory_savings,
-                                                           copy.deepcopy(cache) if memory_mode == MemoryModes.checkpoint
-                                                           else cache,
-                                                           target_device
-                                                           )
-                                          for i, m in enumerate(modules)])
+        for i, m in enumerate(modules):
+            if not isinstance(m, ReversibleModule):
+                m = ReversibleModule(m,
+                                     coupling_forward[i % len(coupling_forward)],
+                                     coupling_inverse[i % len(coupling_inverse)],
+                                     memory_savings,
+                                     copy.deepcopy(cache) if memory_mode == MemoryModes.checkpoint else cache,
+                                     target_device)
+            self.add_module(f'{i // 2}-{i % 2}', m)
         self.split_dim = split_dim
         self.m = memory_mode
 
-    def forward(self, inp: torch.Tensor) -> torch.Tensor:
+    def forward(self, inp: torch.Tensor, *args,
+                layerwise_args_kwargs: typing.Optional[typing.List[typing.Tuple[typing.List[typing.Any],
+                                                                                typing.Dict[str, typing.Any]]]] = None,
+                **kwargs) -> torch.Tensor:
         inp0, inp1 = inp.chunk(2, self.split_dim)
         zeros = torch.zeros_like(inp0)
-        return torch.cat(self.replace_grad(*self.stem((inp0, inp1, zeros, zeros))), dim=self.split_dim)
+        if layerwise_args_kwargs is not None:
+            args = [list(args) + arg[0] for arg in args]
+            kwargs = [{**kwargs, **arg[1]} for arg in args]
+        else:
+            args = [args] * len(self)
+            kwargs = [kwargs] * len(self)
+        if not args:
+            args = [[]] * len(self)
+        if not kwargs:
+            kwargs = [{}] * len(self)
+        out = inp0, inp1, zeros, zeros
+        for mod, arg, kwarg in zip(self, args, kwargs):
+            out = mod(out, *arg, **kwarg)
+        return torch.cat(self.replace_grad(*out), dim=self.split_dim)
