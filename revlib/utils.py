@@ -142,10 +142,10 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
     return torch.nn.ModuleList(out_modules)
 
 
-def _empty_tensor(cls: type, data: typing.Optional[torch.Tensor]) -> torch.Tensor:
+def _empty_tensor(cls: type, data: typing.Optional[torch.Tensor], requires_grad=True) -> torch.Tensor:
     if data is None:
         data = torch.zeros(())
-    if torch.torch_version.TorchVersion(torch.version.__version__) >= 1.11:
+    if torch.torch_version.TorchVersion(torch.version.__version__) >= "1.11":
         r = torch.Tensor._make_wrapper_subclass(cls, data.size(), strides=data.stride(), device=data.device,
                                                 storage_offset=data.storage_offset(), dtype=data.dtype,
                                                 layout=data.layout, requires_grad=requires_grad)
@@ -164,7 +164,7 @@ class HDDParameter(torch.nn.Parameter):
     def __new__(cls, data=None, requires_grad=True):
         file_name = f'.temporary_tensor_buffer_{secrets.token_urlsafe(32)}.pth'
         torch.save(data, file_name)
-        r = _empty_tensor(cls, data)
+        r = _empty_tensor(cls, data, requires_grad)
         r.file_name = file_name
         return r
 
@@ -197,8 +197,8 @@ class QuantizedTensor(torch.Tensor):
         if data is None:
             data = torch.zeros(())
         data = data.clone()
+        r = _empty_tensor(cls, data, requires_grad)
         data, (absmax, code) = quantize_blockwise(data)
-        r = _empty_tensor(cls, data)
         r.elem = data
         r.absmax = absmax
         r.code = code
