@@ -172,8 +172,15 @@ class HDDParameter(torch.nn.Parameter):
         return f"OffloadedParameter({self.data})"
 
     @classmethod
-    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-        return func(*tree_map(_unwrap_offloaded_parameter, args), **tree_map(_unwrap_offloaded_parameter, kwargs))
+    def __torch_dispatch__(cls, func: typing.Callable, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        out = func(*tree_map(_unwrap_offloaded_parameter, args), **tree_map(_unwrap_offloaded_parameter, kwargs))
+        if hasattr(func, '__name__') and func.__name__ != '_' and func.__name__.endswith('_'):
+            torch.save(out, args[0].file_name)
+        elif 'out' in kwargs:
+            torch.save(out, kwargs['out'])
+        return out
 
     def __del__(self):
         os.remove(self.file_name)
@@ -209,6 +216,8 @@ class QuantizedTensor(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
         out = func(*tree_map(_unwrap_quantized_tensor, args), **tree_map(_unwrap_quantized_tensor, kwargs))
         return tree_map(_wrap_quantized_tensor, out)
 

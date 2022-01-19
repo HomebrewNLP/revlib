@@ -17,6 +17,8 @@ Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support a
             * [iRevNet](#irevnet)
             * [Reformer](#reformer)
         * [Utils](#utils)
+            * [HDD Offload](#HDD-Offload)
+            * [Huggingface](#Huggingface)
     * [Explanation](#explanation)
 
 ## Features
@@ -263,6 +265,60 @@ assert out.size() == (16, sequence, classes)
 ```
 
 #### Utils
+
+##### HDD Offload
+
+One of the core features of RevLib is that, when used together with RevNet or checkpointing, it can offload parameters
+onto RAM. This way, the GPU memory utilization is truly constant with increasing depth, which allows for enormous models
+on limited resources.\
+Since RevLib v1.5.1, you can now take it one step further and offload straight onto storage. This way, even the CPU RAM
+gets freed as well and 200B models are just
+[1TB (120€)](https://www.digitec.ch/en/s1/product/samsung-870-evo-1000-gb-25-ssd-14598791) away!
+
+```PYTHON
+import time
+import torch
+from memory_profiler import memory_usage
+from revlib.utils import HDDParameter
+
+
+def do_it(cls):
+    t = [cls(torch.randn((2 ** 14, 2 ** 14)) / 2 ** 10, requires_grad=True) for _ in range(1024)]
+    start_time = time.time()
+    for k in t:
+        k.requires_grad_(True)
+    for i in range(5):
+        with torch.enable_grad():
+            out = t[0][0:64] @ t[1][:, 0:128] @ t[2][256:384]
+            out.mean().backward()
+        for k in t:
+            grad = k.grad
+            if grad is None:
+                continue
+            grad = grad.clone()
+            k.grad = None
+            k.detach_()
+            k.requires_grad_(False)
+            k -= grad * 0.1
+            k.detach_()
+            k.requires_grad_(True)
+    print(f'took {time.time() - start_time:.2f}s, ', end='')
+
+
+def main():
+    print(max(memory_usage((lambda: None,))), "MB")  # 346.40234375 MB
+    print(max(memory_usage((lambda: do_it(HDDParameter),))), "MB")  # took 106.33s, 5541.34765625 MB
+    print(max(memory_usage((lambda: do_it(torch.nn.Parameter),))), "MB")  # took 11.76s, 8613.398475 MB
+
+
+if __name__ == '__main__':
+    main()
+```
+
+While the results above are pretty nice already, it gets even more impressive with structured sparsity.\
+When implementing a set of weights using lists, 
+
+##### Huggingface
 
 RevLib also has its own `utils` module which provides helpful functions as `residual_to_momentum_net`. Using RevLib, you
 can trivially convert any HuggingFace transformer into a MomentumNet without significant loss of performance. Especially
