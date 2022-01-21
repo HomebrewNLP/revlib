@@ -1,6 +1,10 @@
+import os
+import secrets
 import typing
 
 import torch.utils.checkpoint
+from bitsandbytes.functional import quantize_blockwise, dequantize_blockwise
+from torch.utils._pytree import tree_map
 
 from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, split_tensor_list, MergeCalls
 
@@ -136,3 +140,95 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
                    for i in range(0, len(stem) - 1, 2)]
     out_modules.append(modules[-1])
     return torch.nn.ModuleList(out_modules)
+
+
+def _empty_tensor(cls: type, data: typing.Optional[torch.Tensor], requires_grad=True) -> torch.Tensor:
+    if data is None:
+        data = torch.zeros(())
+    if torch.torch_version.TorchVersion(torch.version.__version__) >= "1.11":
+        r = torch.Tensor._make_wrapper_subclass(cls, data.size(), strides=data.stride(), device=data.device,
+                                                storage_offset=data.storage_offset(), dtype=data.dtype,
+                                                layout=data.layout, requires_grad=requires_grad)
+    else:
+        meta = data.new_empty((0,))
+        meta.set_(meta.storage(), 0, data.size(), data.stride())
+        r = torch.Tensor._make_subclass(cls, meta, data.requires_grad)
+    return r
+
+
+class HDDParameter(torch.nn.Parameter):
+    file_name: str
+    __slots__ = ['file_name']
+
+    @staticmethod
+    def __new__(cls, data=None, requires_grad=True):
+        file_name = f'.temporary_tensor_buffer_{secrets.token_urlsafe(32)}.pth'
+        torch.save(data, file_name)
+        r = _empty_tensor(cls, data, requires_grad)
+        r.file_name = file_name
+        return r
+
+    def __repr__(self):
+        return f"OffloadedParameter({self.data})"
+
+    @classmethod
+    def __torch_dispatch__(cls, func: typing.Callable, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        out = func(*tree_map(_unwrap_offloaded_parameter, args), **tree_map(_unwrap_offloaded_parameter, kwargs))
+        if hasattr(func, '__name__') and func.__name__ != '_' and func.__name__.endswith('_'):
+            torch.save(out, args[0].file_name)
+        elif 'out' in kwargs:
+            torch.save(out, kwargs['out'])
+        return out
+
+    def __del__(self):
+        os.remove(self.file_name)
+
+
+def _unwrap_offloaded_parameter(inp: typing.Any) -> typing.Any:
+    if not isinstance(inp, HDDParameter):
+        return inp
+    return torch.load(inp.file_name).requires_grad_(inp.requires_grad).to(device=inp.device, non_blocking=True)
+
+
+class QuantizedTensor(torch.Tensor):
+    elem: torch.Tensor
+    absmax: torch.Tensor
+    code: torch.Tensor
+
+    __slots__ = ['elem', 'absmax', 'code']
+
+    @staticmethod
+    def __new__(cls, data=None, requires_grad=True):
+        if data is None:
+            data = torch.zeros(())
+        data = data.clone()
+        r = _empty_tensor(cls, data, requires_grad)
+        data, (absmax, code) = quantize_blockwise(data)
+        r.elem = data
+        r.absmax = absmax
+        r.code = code
+        return r
+
+    def __repr__(self):
+        return f"QuantizedTensor({self.elem})"
+
+    @classmethod
+    def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
+        if kwargs is None:
+            kwargs = {}
+        out = func(*tree_map(_unwrap_quantized_tensor, args), **tree_map(_unwrap_quantized_tensor, kwargs))
+        return tree_map(_wrap_quantized_tensor, out)
+
+
+def _unwrap_quantized_tensor(inp: typing.Any) -> typing.Any:
+    if not isinstance(inp, QuantizedTensor):
+        return inp
+    return dequantize_blockwise(inp.elem, absmax=inp.absmax, code=inp.code)
+
+
+def _wrap_quantized_tensor(inp: typing.Any) -> typing.Any:
+    if not isinstance(inp, torch.Tensor):
+        return inp
+    return QuantizedTensor(inp)
