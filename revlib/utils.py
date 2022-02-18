@@ -150,6 +150,8 @@ class HDDParameter(torch.nn.Parameter):
     def __new__(cls, data=None, requires_grad=True):
         if data is None:
             data = torch.zeros(())
+        meta = data.new_empty((0,))
+        meta.set_(meta.storage(), 0, data.size(), data.stride())
         r = torch.Tensor._make_wrapper_subclass(cls, data.size(), strides=data.stride(), device=data.device,
                                                 storage_offset=data.storage_offset(), dtype=data.dtype,
                                                 layout=data.layout, requires_grad=requires_grad)
@@ -172,7 +174,7 @@ class HDDParameter(torch.nn.Parameter):
 def _unwrap_offloaded_parameter(inp: typing.Any) -> typing.Any:
     if not isinstance(inp, HDDParameter):
         return inp
-    return torch.load(inp.file_name).requires_grad_(inp.requires_grad).to(device=inp.device, non_blocking=True)
+    return torch.load(inp.file_name).requires_grad_(inp.requires_grad)
 
 
 class QuantizedTensor(torch.Tensor):
@@ -186,7 +188,8 @@ class QuantizedTensor(torch.Tensor):
     def __new__(cls, data=None, requires_grad=True):
         if data is None:
             data = torch.zeros(())
-        data = data.clone()
+        meta = data.new_empty((0,))
+        meta.set_(meta.storage(), 0, data.size(), data.stride())
         r = torch.Tensor._make_wrapper_subclass(cls, data.size(), strides=data.stride(), device=data.device,
                                                 storage_offset=data.storage_offset(), dtype=data.dtype,
                                                 layout=data.layout, requires_grad=requires_grad)
@@ -201,7 +204,7 @@ class QuantizedTensor(torch.Tensor):
 
     @classmethod
     def __torch_dispatch__(cls, func, types, args=(), kwargs=None):
-        out = func(*tree_map(_unwrap_quantized_tensor, args), **tree_map(_unwrap_quantized_tensor, kwargs))
+        out = func(*tree_map(_unwrap_offloaded_parameter, args), **tree_map(_unwrap_offloaded_parameter, kwargs))
         return tree_map(_wrap_quantized_tensor, out)
 
 
