@@ -262,6 +262,83 @@ out = model(torch.ones((16, sequence), dtype=torch.long))
 assert out.size() == (16, sequence, classes)
 ```
 
+#### Merged Optimizer
+
+Another optimization RevLib allows is to merge the optimizer step and backward.\
+Instead of first computing a backward pass and then applying the gradients in a separate stage, RevLib can apply the
+gradients immediately while calculating the backward pass. This change allows you to get speedups by taking advantage of
+asynchronous computation and means that you don't have to instantiate all gradients simultaneously. So, instead of
+storing all gradients simultaneously, you only keep the gradients of one layer while still arriving at the same results.
+Below is a small example demonstrating just how much memory this can save:
+
+```PYTHON
+import os
+import random
+import typing
+
+import numpy as np
+import psutil
+import torch
+
+import revlib
+
+
+def optim(params: typing.Iterable[torch.Tensor]):
+    return torch.optim.SGD(params, lr=1e-3)
+
+
+SIZE = 2048
+BATCH_SIZE = 1
+STEPS = 64
+
+
+def block():
+    return torch.nn.Sequential(torch.nn.Linear(SIZE, SIZE),
+                               torch.nn.ReLU(),
+                               torch.nn.Linear(SIZE, SIZE))
+
+
+process = psutil.Process(os.getpid())
+
+
+def run(fused: bool):
+    torch.manual_seed(42069)
+    random.seed(42069)
+    np.random.seed(42069)
+    model = revlib.ReversibleSequential(block(), block(), block(), block(), fused_optimizer=optim if fused else None)
+
+    optimizer = None if fused else optim(model.parameters())
+    mean_loss = 0
+    max_mem = 0
+    for i in range(STEPS):
+        max_mem = max(process.memory_info().rss, max_mem)
+        inp = torch.randn((BATCH_SIZE, SIZE * 2), requires_grad=True, device='cpu')
+        max_mem = max(process.memory_info().rss, max_mem)
+        loss = (model(inp) - inp).abs().mean()
+        max_mem = max(process.memory_info().rss, max_mem)
+        loss.backward()
+        max_mem = max(process.memory_info().rss, max_mem)
+        if not fused:
+            optimizer.step()
+            max_mem = max(process.memory_info().rss, max_mem)
+            model.zero_grad(set_to_none=True)
+        max_mem = max(process.memory_info().rss, max_mem)
+        with torch.no_grad():
+            mean_loss += loss.item()
+    print(mean_loss / STEPS, max_mem * 2 ** -20)
+
+
+run(True)  # 0.2738525625318289 385.265625
+run(False)  # 0.273852557875216  481.31640625
+```
+
+As you can see, while the loss is still the same up to the 8th digit (`0.2738525`), the model uses 100MB less memory at
+its peak. The freed-up memory would allow you to create 25 million more parameters. Considering that the model only has
+30 million parameters, this would mean you could use ~100% more parameters!\
+Of course, the absolute freed memory would stay the same if the optimizer had buffers, such as SGD with momentum.
+Because of that, the relative memory advantage would decrease. That's why a memory-efficient optimizer
+like [SM3](https://arxiv.org/abs/1901.11150) is perfect here.
+
 #### Utils
 
 RevLib also has its own `utils` module which provides helpful functions as `residual_to_momentum_net`. Using RevLib, you

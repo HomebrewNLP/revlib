@@ -1,5 +1,6 @@
 import copy
 import enum
+import threading
 import typing
 
 import torch
@@ -68,14 +69,22 @@ class ReversibleWrapper(torch.nn.Module):
         return self.coupling_inverse(y1, self.wrapped_module(y0, *args, **kwargs))
 
 
+def _optimizer_step(optimizer_step: typing.Optional[typing.Callable[[], None]], module: torch.nn.Module):
+    optimizer_step()
+    module.zero_grad(set_to_none=True)
+
+
 class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
     @staticmethod
     def forward(ctx, x0: torch.Tensor, x1: torch.Tensor, back_x0: torch.Tensor, back_x1: torch.Tensor,
-                mod: ReversibleWrapper, target_device: str, cuda: bool, args: typing.Iterable, kwargs: dict):
+                mod: ReversibleWrapper, target_device: str, cuda: bool,
+                optimizer_step: typing.Optional[typing.Callable[[], None]], args: typing.Iterable,
+                kwargs: dict):
         ctx.mod = mod
         ctx.target_device = target_device
         ctx.forward_rng_state = torch.get_rng_state()
         ctx.cuda = cuda
+        ctx.optimizer_step = optimizer_step
         ctx.args = args
         ctx.kwargs = kwargs
         if cuda:
@@ -91,7 +100,8 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
 
     @staticmethod
     def backward(ctx, dy0: torch.Tensor, dy1: torch.Tensor, y0: torch.Tensor, y1: torch.Tensor, _unused
-                 ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None]:
+                 ) -> typing.Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, None, None, None, None, None,
+                                   None]:
         original_rng_state = torch.get_rng_state()
         torch.set_rng_state(ctx.forward_rng_state)
         if dy0 is None:
@@ -110,6 +120,8 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
             x0 = ctx.mod.coupling_inverse(y1, mod_out.detach()).detach()
         with torch.enable_grad():
             out = ctx.mod.coupling_forward(x0, mod_out)
+        if hasattr(dy1, "thread"):
+            dy1.thread.join()
         torch.autograd.backward(out, dy1)
         if ctx.target_device:
             with torch.no_grad():
@@ -126,7 +138,10 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
         torch.set_rng_state(original_rng_state)
         with torch.enable_grad():
             out_grad = ctx.mod.coupling_forward(dy0, y0.grad).detach_()
-            return dy1.detach(), out_grad, x0, y0, None, None, None, None, None
+            if ctx.optimizer_step is not None:
+                out_grad.thread = threading.Thread(target=_optimizer_step, args=(ctx.optimizer_step, ctx.mod))
+                out_grad.thread.start()
+            return dy1.detach(), out_grad, x0, y0, None, None, None, None, None, None
 
 
 class TensorOffload(torch.autograd.Function):
@@ -174,7 +189,8 @@ class ReversibleModule(torch.nn.Module):
 
     def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Optional[COUPLING] = None,
                  coupling_inverse: typing.Optional[COUPLING] = None, memory_savings: bool = True,
-                 cache: typing.Optional[ReversibleModuleCache] = None, target_device: str = ""):
+                 cache: typing.Optional[ReversibleModuleCache] = None, target_device: str = "",
+                 fused_optimizer: typing.Optional[typing.Callable[[typing.Iterable], torch.optim.Optimizer]] = None):
         super(ReversibleModule, self).__init__()
         self.wrapped_module = ReversibleWrapper(wrapped_module, coupling_forward, coupling_inverse)
         self.target_device = target_device
@@ -189,6 +205,19 @@ class ReversibleModule(torch.nn.Module):
         self.storage: typing.Dict[str, torch.Tensor] = {}
         self.input_args = []
         self.input_kwargs = {}
+
+        if fused_optimizer is None:
+            self.fused_optimizer = None
+            self.fused_optimizer_step = None
+        else:
+            self.fused_optimizer = fused_optimizer(self.wrapped_module.parameters())
+            self.fused_optimizer_step = self.fused_optimizer.step
+
+        if self.fused_optimizer is not None and not self.memory_savings:
+            raise ValueError("Can't fuse the optimizer if RevLib doesn't modify the training graph!")
+
+        if self.fused_optimizer is not None and self.cache is not None:
+            raise ValueError("Fused optimizer is not currently supported with checkpointing and autograd-graph.")
 
     def get_key(self, idx: int, inp: torch.Tensor):
         key = f'Index: {idx}\nSize: {inp.size()}\nDevice: {inp.device}\nDataType: {inp.dtype}'
@@ -240,7 +269,7 @@ class ReversibleModule(torch.nn.Module):
 
         if self.cache is None:
             x0, x1, y0, y1, res = reverse_and_swap(x0, x1, *back, self.wrapped_module, self.target_device, self.cuda,
-                                                   args, kwargs)
+                                                   self.fused_optimizer_step, args, kwargs)
             if res is not None:
                 x1 = [x1] + res
             return x0, x1, y0, y1
@@ -325,7 +354,8 @@ class ReversibleSequential(torch.nn.Sequential):
                  coupling_forward: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
                  coupling_inverse: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
                  memory_mode: MemoryModes = MemoryModes.autograd_function,
-                 target_device: str = ""):
+                 target_device: str = "",
+                 fused_optimizer: typing.Optional[typing.Callable[[typing.Iterable], torch.optim.Optimizer]] = None):
         super(ReversibleSequential, self).__init__()
         coupling_forward = list(coupling_forward) if coupling_forward else [None]
         coupling_inverse = list(coupling_inverse) if coupling_inverse else [None]
@@ -339,7 +369,8 @@ class ReversibleSequential(torch.nn.Sequential):
                                      coupling_inverse[i % len(coupling_inverse)],
                                      memory_savings,
                                      copy.deepcopy(cache) if memory_mode == MemoryModes.checkpoint else cache,
-                                     target_device)
+                                     target_device,
+                                     fused_optimizer)
             self.add_module(f'{i // 2}-{i % 2}', m)
         self.split_dim = split_dim
         self.m = memory_mode
