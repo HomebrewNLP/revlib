@@ -327,11 +327,11 @@ def run(fused: bool):
         max_mem = max(torch.cuda.memory_allocated(), max_mem)
         with torch.no_grad():
             mean_loss += loss.item()
-    print(mean_loss / STEPS, max_mem * 2 ** -20)
+    print(f"Loss: {mean_loss / STEPS:12.10f} - Memory: {max_mem * 2 ** -20:7.2f} MiB")
 
 
-run(True)   # 1.74443519115448 2081.04736328125
-run(False)  # 1.74443519115448 4098.03173828125
+run(True)  # Fused Optimizer. Results:       Loss: 1.7444351912 - Memory: 2049.05 MiB
+run(False)  # Default Optimizer. Results:    Loss: 1.7444351912 - Memory: 4098.03 MiB
 ```
 
 As you can see, while the loss is still the exact same, the model uses half the memory at its peak. The freed-up memory
