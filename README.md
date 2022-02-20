@@ -288,8 +288,9 @@ def optim(params: typing.Iterable[torch.Tensor]):
 
 
 SIZE = 2048
+DEPTH = 64
 BATCH_SIZE = 1
-STEPS = 64
+STEPS = 4
 
 
 def block():
@@ -305,39 +306,41 @@ def run(fused: bool):
     torch.manual_seed(42069)
     random.seed(42069)
     np.random.seed(42069)
-    model = revlib.ReversibleSequential(block(), block(), block(), block(), fused_optimizer=optim if fused else None)
+    model = revlib.ReversibleSequential(*[block() for _ in range(DEPTH)], fused_optimizer=optim if fused else None)
+    model.cuda()
 
     optimizer = None if fused else optim(model.parameters())
     mean_loss = 0
     max_mem = 0
     for i in range(STEPS):
-        max_mem = max(process.memory_info().rss, max_mem)
-        inp = torch.randn((BATCH_SIZE, SIZE * 2), requires_grad=True, device='cpu')
-        max_mem = max(process.memory_info().rss, max_mem)
+        max_mem = max(torch.cuda.memory_allocated(), max_mem)
+        inp = torch.randn((BATCH_SIZE, SIZE * 2), requires_grad=True, device='cuda')
+        max_mem = max(torch.cuda.memory_allocated(), max_mem)
         loss = (model(inp) - inp).abs().mean()
-        max_mem = max(process.memory_info().rss, max_mem)
+        max_mem = max(torch.cuda.memory_allocated(), max_mem)
         loss.backward()
-        max_mem = max(process.memory_info().rss, max_mem)
+        max_mem = max(torch.cuda.memory_allocated(), max_mem)
         if not fused:
             optimizer.step()
-            max_mem = max(process.memory_info().rss, max_mem)
+            max_mem = max(torch.cuda.memory_allocated(), max_mem)
             model.zero_grad(set_to_none=True)
-        max_mem = max(process.memory_info().rss, max_mem)
+        max_mem = max(torch.cuda.memory_allocated(), max_mem)
         with torch.no_grad():
             mean_loss += loss.item()
     print(mean_loss / STEPS, max_mem * 2 ** -20)
 
 
-run(True)  # 0.2738525625318289 385.265625
-run(False)  # 0.273852557875216  481.31640625
+run(True)   # 1.74443519115448 2081.04736328125
+run(False)  # 1.74443519115448 4098.03173828125
 ```
 
-As you can see, while the loss is still the same up to the 8th digit (`0.2738525`), the model uses 100MB less memory at
-its peak. The freed-up memory would allow you to create 25 million more parameters. Considering that the model only has
-30 million parameters, this would mean you could use ~100% more parameters!\
+As you can see, while the loss is still the exact same, the model uses half the memory at its peak. The freed-up memory
+would allow you to create 504 million more parameters. Considering that the model only has 512 million parameters, this
+would mean you could use ~100% more parameters!\
 Of course, the absolute freed memory would stay the same if the optimizer had buffers, such as SGD with momentum.
 Because of that, the relative memory advantage would decrease. That's why a memory-efficient optimizer
-like [SM3](https://arxiv.org/abs/1901.11150) is perfect here.
+like [SM3](https://arxiv.org/abs/1901.11150) or
+[8-bit Adam](https://github.com/facebookresearch/bitsandbytes/#using-the-8-bit-optimizers) is perfect here.
 
 #### Utils
 
