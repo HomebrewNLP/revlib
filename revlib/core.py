@@ -206,11 +206,13 @@ class ReversibleModule(torch.nn.Module):
         self.input_args = []
         self.input_kwargs = {}
 
-        if fused_optimizer is None:
+        parameters = list(self.wrapped_module.parameters())
+
+        if fused_optimizer is None or not parameters:
             self.fused_optimizer = None
             self.fused_optimizer_step = None
         else:
-            self.fused_optimizer = fused_optimizer(self.wrapped_module.parameters())
+            self.fused_optimizer = fused_optimizer(parameters)
             self.fused_optimizer_step = self.fused_optimizer.step
 
         if self.fused_optimizer is not None and not self.memory_savings:
