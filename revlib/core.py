@@ -10,6 +10,7 @@ DUAL_OR_QUAD_TENSOR = typing.Union[typing.Tuple[torch.Tensor, torch.Tensor, torc
                                    typing.Tuple[torch.Tensor, torch.Tensor]]
 TENSOR_OR_LIST = typing.Union[typing.List[torch.Tensor], torch.Tensor]
 COUPLING = typing.Callable[[torch.Tensor, TENSOR_OR_LIST], TENSOR_OR_LIST]
+FUSED_OPTIMIZER = typing.Optional[typing.Callable[[typing.Iterable], torch.optim.Optimizer]]
 
 
 class MemoryModes(enum.IntEnum):
@@ -57,6 +58,17 @@ def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tenso
 class ReversibleWrapper(torch.nn.Module):
     def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Optional[COUPLING] = None,
                  coupling_inverse: typing.Optional[COUPLING] = None):
+        """
+        A handy utility-module that allows accessing inverses without rewriting significant amounts of code. This module
+        does not do reversibility by itself. It's mostly used as a storage object.
+
+        :param wrapped_module: the module that's supposed to be run in a revnet-like structure
+        :param coupling_forward: RevNet uses y0 = (x0 + f(x1)) as a coupling function, but this allows you to set a
+        custom one. For example, MomentumNet (https://arxiv.org/abs/2102.07870) uses
+        y0 = (beta * x0 + (1 - beta) * f(x1)). The inputs to the coupling function are the residual stream and the
+        function output. For more information, look at the examples. default = revnet couplint
+        :param coupling_inverse: The inverse of the coupling function. default = revnet inverse
+        """
         super(ReversibleWrapper, self).__init__()
         self.wrapped_module = wrapped_module
         self.coupling_forward = coupling_forward or additive_coupling_forward
@@ -145,6 +157,11 @@ class _ReversibleHalfResidualSwapFn(torch.autograd.Function):
 
 
 class TensorOffload(torch.autograd.Function):
+    """
+    Allows offloading a single tensor to another device, without altering the tensor itself. This is kind of like .to()
+    from pytorch, without forcing the tensor (or parameter!) to stay on the new device forever.
+    """
+
     @staticmethod
     def forward(ctx, inp: torch.Tensor, reference: torch.Tensor):
         ctx.device = inp.device
@@ -190,7 +207,31 @@ class ReversibleModule(torch.nn.Module):
     def __init__(self, wrapped_module: torch.nn.Module, coupling_forward: typing.Optional[COUPLING] = None,
                  coupling_inverse: typing.Optional[COUPLING] = None, memory_savings: bool = True,
                  cache: typing.Optional[ReversibleModuleCache] = None, target_device: str = "",
-                 fused_optimizer: typing.Optional[typing.Callable[[typing.Iterable], torch.optim.Optimizer]] = None):
+                 fused_optimizer: FUSED_OPTIMIZER = None):
+
+        """
+        A `ReversibleModule` that does the heavy lifting of dispatching to various backends in an effort to avoid
+        storing all intermediate buffers at the same time. It can wrap any module.
+
+        :param wrapped_module: The one module that's supposed to be wrapped in a reversible way. (You need multiple
+        sequential modules to see memory gains.)
+        :param coupling_forward: RevNet uses y0 = (x0 + f(x1)) as a coupling function, but this allows you to set a
+        custom one. For example, MomentumNet (https://arxiv.org/abs/2102.07870) uses
+        y0 = (beta * x0 + (1 - beta) * f(x1)). The inputs to the coupling function are the residual stream and the
+        function output. For more information, look at the examples. default = revnet couplint
+        :param coupling_inverse: The inverse of the coupling function. default = revnet inverse
+        :param memory_savings: whether to use memory savings or not. disabling results in a revnet that will allocate
+        all intermediate tensors as a normal non-reversible network would.
+        :param cache: an optional cache that's used to store intermediate buffers for the reversible module. if there's
+        no cache, it will fall back to using autograd functions.
+        :param target_device: Specifies where the parameters should be moved to before computing the forward and
+        backward pass. This allows efficient CPU-offloading.
+        default = no offloading (keep parameters on the device they're on)
+        :param fused_optimizer: Allows an optimizer step to run while the model is computing its backward pass. This
+        means that the gradients don't have to be fully instantiated anymore and can improve speed when used with
+        cpu-offload due to asynchronous compute. It expects a function that generates an optimizer from a list of
+        parameters. (like Adam.__init__) default = no fused optimizer step
+        """
         super(ReversibleModule, self).__init__()
         self.wrapped_module = ReversibleWrapper(wrapped_module, coupling_forward, coupling_inverse)
         self.target_device = target_device
@@ -295,18 +336,56 @@ class ReversibleModule(torch.nn.Module):
 
 class SingleBranchReversibleModule(ReversibleModule):
     def __init__(self, secondary_branch_buffer: typing.List[torch.Tensor], wrapped_module: torch.nn.Module,
+                 split_dim: int = 1,
                  coupling_forward: typing.Optional[COUPLING] = None,
                  coupling_inverse: typing.Optional[COUPLING] = None, memory_savings: bool = True,
                  cache: typing.Optional[ReversibleModuleCache] = None,
                  target_device: str = "",
+                 fused_optimizer: FUSED_OPTIMIZER = None,
                  first: bool = False,
                  last: bool = False):
-        super(SingleBranchReversibleModule, self).__init__(wrapped_module=wrapped_module,
+        """
+        A wrapper around `ReversibleModule` that hides all additional outputs and pretends the model is still acting
+        the same way it used to.
+        Doing so requires some additional buffers which isn't as efficient as handling the RevNet buffers explicitly,
+        but it allows seamless integration into existing models.
+
+        :param secondary_branch_buffer: A buffer of tensors that's shared across all instances of `ReversibleModule`,
+        which is used to store additional outputs which aren't returned.
+        :param wrapped_module: The one module that's supposed to be wrapped in a reversible way. (You need multiple
+        sequential modules to see memory gains.)
+        :param split_dim: RevNets require two streams. This parameter specifies which dimension to split in half to
+        create the two streams. `None` would mean the input gets replicated for both streams. It's usually best to split
+        along the features, which is why the default (1) is compatible with convolutions.
+        :param coupling_forward: RevNet uses y0 = (x0 + f(x1)) as a coupling function, but this allows you to set a
+        custom one. For example, MomentumNet (https://arxiv.org/abs/2102.07870) uses
+        y0 = (beta * x0 + (1 - beta) * f(x1)). The inputs to the coupling function are the residual stream and the
+        function output. For more information, look at the examples. default = revnet couplint
+        :param coupling_inverse: The inverse of the coupling function. default = revnet inverse
+        :param memory_savings: whether to use memory savings or not. disabling results in a revnet that will allocate
+        all intermediate tensors as a normal non-reversible network would.
+        :param cache: an optional cache that's used to store intermediate buffers for the reversible module. if there's
+        no cache, it will fall back to using autograd functions.
+        :param target_device: Specifies where the parameters should be moved to before computing the forward and
+        backward pass. This allows efficient CPU-offloading.
+        default = no offloading (keep parameters on the device they're on)
+        :param fused_optimizer: Allows an optimizer step to run while the model is computing its backward pass. This
+        means that the gradients don't have to be fully instantiated anymore and can improve speed when used with
+        cpu-offload due to asynchronous compute. It expects a function that generates an optimizer from a list of
+        parameters. (like Adam.__init__) default = no fused optimizer step
+        :param first: Whether it's the first module of a sequence. If so, it will initialize all buffers and make sure
+        they're passed along.
+        :param last: Whether it's the last module of a sequence. If so, it will run the necessary clean-up procedures to
+        ensure pytorch's autograd will work.
+        """
+        super(SingleBranchReversibleModule, self).__init__(split_dim=split_dim,
+                                                           wrapped_module=wrapped_module,
                                                            coupling_forward=coupling_forward,
                                                            coupling_inverse=coupling_inverse,
                                                            memory_savings=memory_savings,
                                                            cache=cache,
-                                                           target_device=target_device)
+                                                           target_device=target_device,
+                                                           fused_optimizer=fused_optimizer)
         self.secondary_branch_buffer = secondary_branch_buffer
         self.first = first
         self.last = last
@@ -334,6 +413,14 @@ class SingleBranchReversibleModule(ReversibleModule):
 
 class MergeCalls(torch.nn.Module):
     def __init__(self, *modules: SingleBranchReversibleModule, collate_fn: typing.Callable[[torch.Tensor, list], list]):
+        """
+        MergeCalls acts the same way as nn.Sequential, but allows the usage of a custom collate function which specifies
+        which outputs to return. It also allows arguments and keyword-arguments.
+        Thanks to MergeCalls, it's trivial to integrate MomentumNets into existing sequential models without giving up
+        on the custom tooling built around the models!
+        :param modules: all modules that will be executed sequentially
+        :param collate_fn: collate function that takes in all outputs and returns a list of tensors.
+        """
         super(MergeCalls, self).__init__()
         self.wrapped_modules = torch.nn.ModuleList(modules)
         self.collate_fn = collate_fn
@@ -352,12 +439,36 @@ class MergeCalls(torch.nn.Module):
 
 
 class ReversibleSequential(torch.nn.Sequential):
-    def __init__(self, *modules, split_dim=1,
+    def __init__(self, *modules, split_dim: typing.Optional[int] = 1,
                  coupling_forward: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
                  coupling_inverse: typing.Optional[typing.List[typing.Optional[COUPLING]]] = None,
                  memory_mode: MemoryModes = MemoryModes.autograd_function,
                  target_device: str = "",
-                 fused_optimizer: typing.Optional[typing.Callable[[typing.Iterable], torch.optim.Optimizer]] = None):
+                 fused_optimizer: FUSED_OPTIMIZER = None):
+        """
+        Wrapper around `ReversibleModule` that automatically creates a sequential RevNet as introduced in
+        https://arxiv.org/abs/1707.04585
+
+        :param modules: All nn.Modules that should be wrapped. It's the same syntax as nn.Sequential, but adds a
+        reversible residual stream.
+        :param split_dim: RevNets require two streams. This parameter specifies which dimension to split in half to
+        create the two streams. `None` would mean the input gets replicated for both streams. It's usually best to split
+        along the features, which is why the default (1) is compatible with convolutions.
+        :param coupling_forward: RevNet uses y0 = (x0 + f(x1)) as a coupling function, but this allows you to set a
+        custom one. For example, MomentumNet (https://arxiv.org/abs/2102.07870) uses
+        y0 = (beta * x0 + (1 - beta) * f(x1)). The inputs to the coupling function are the residual stream and the
+        function output. For more information, look at the examples. default = revnet couplint
+        :param coupling_inverse: The inverse of the coupling function. default = revnet inverse
+        :param memory_mode: One of `MemoryModes`'s values. Some things are only supported in one mode while others
+        might only be supported in another. default = autograd function (highest coverage but spotty XLA support)
+        :param target_device: Specifies where the parameters should be moved to before computing the forward and
+        backward pass. This allows efficient CPU-offloading.
+        default = no offloading (keep parameters on the device they're on)
+        :param fused_optimizer: Allows an optimizer step to run while the model is computing its backward pass. This
+        means that the gradients don't have to be fully instantiated anymore and can improve speed when used with
+        cpu-offload due to asynchronous compute. It expects a function that generates an optimizer from a list of
+        parameters. (like Adam.__init__) default = no fused optimizer step
+        """
         super(ReversibleSequential, self).__init__()
         coupling_forward = list(coupling_forward) if coupling_forward else [None]
         coupling_inverse = list(coupling_inverse) if coupling_inverse else [None]
@@ -381,7 +492,10 @@ class ReversibleSequential(torch.nn.Sequential):
                 layerwise_args_kwargs: typing.Optional[typing.List[typing.Tuple[typing.List[typing.Any],
                                                                                 typing.Dict[str, typing.Any]]]] = None,
                 **kwargs) -> torch.Tensor:
-        inp0, inp1 = inp.chunk(2, self.split_dim)
+        if self.split_dim is None:
+            inp0 = inp1 = inp
+        else:
+            inp0, inp1 = inp.chunk(2, self.split_dim)
         zeros = torch.zeros_like(inp0)
         if layerwise_args_kwargs is not None:
             args = [list(args) + arg[0] for arg in args]
