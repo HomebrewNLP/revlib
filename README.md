@@ -428,7 +428,10 @@ print(memory - max(memory_usage((lambda: None,))))
 Another nice feature RevLib has, is that it can automatically offload intermediate values or cast them to another
 datatype. Casting the intermediate tensors used during the backward pass from float32 to half-precision (float16) would
 halve the memory required for intermediate values.\
-To integrate it into existing code, take a look at what we do below:
+To integrate it into your existing code, you only have to wrap your step with the `memory_efficient_intermediates`
+context manager. Wrapping multiple steps or even the entire training loop would cause memory leaks. Below you can see a
+small example of how the optimisation could use it in practice:
+
 
 ```PYTHON
 import torch
@@ -444,10 +447,10 @@ def run():
     torch.manual_seed(0)
     out = a = torch.randn((ITEMS,), device='cuda', dtype=torch.float32, requires_grad=True)
     for i in range(ITERATIONS):
-        out = out * torch.randn_like(a)
-    print(f'Output: {a.mean().item():} - Memory: {torch.cuda.memory_allocated() * 1e-6:.2f}MB', end='')
+        out = out * torch.randn_like(out)
+    print(f'Output: {out.mean().item():} - Memory: {torch.cuda.memory_allocated() * 1e-6:.2f}MB', end='')
     out.mean().backward()
-    print(f' - Grad: {out.mean().item()}')
+    print(f' - Grad: {a.grad.mean().item()}')
 
 
 run()  # Output: -0.0002206185890827328 - Memory: 2281.70MB - Grad: 0.00011316053132759407
@@ -468,8 +471,8 @@ For example, when switching the computation datatype above from float32 to float
 following printout:
 
 ```
-Output: -1.2457215497263025e-05 - Memory: 4563.40MB - Grad: 0.00019801305610731704
-Output: -1.2457215497263025e-05 - Memory: 1342.18MB - Grad: 0.00019801305610731704
+Output: 0.00019801305610731704 - Memory: 4563.40MB - Grad: -1.1288092155692513e-11
+Output: 0.00019801305610731704 - Memory: 1342.18MB - Grad: -1.1293845258815898e-11
 ```
 
 As you can see, the model uses almost four times less memory, giving you the memory advantages of float16 without losing
@@ -503,10 +506,10 @@ def run():
     print(f' - Grad: {out.mean().item()}')
 
 
-run()  # Output: -0.0002206185890827328 - Memory: 2281.70MB - Grad: 0.00011316053132759407
+run()  # Output: 0.00011316053132759407 - Memory: 2281.70MB - Grad: 1.1337489974616588e-11
 
 with memory_efficient_intermediates(storage_device='cpu'):  # <-- This is the only line that's modified
-    run()  # Output: -0.0002206185890827328 - Memory: 134.22MB - Grad: 0.00011316053132759407
+    run()  # Output: 0.00011316053132759407 - Memory: 134.22MB - Grad: 1.1337489974616588e-11
 
 with torch.no_grad():
     run()  # Output: -0.0002206185890827328 - Memory: 134.22MB - Grad: 0.00011316053132759407
