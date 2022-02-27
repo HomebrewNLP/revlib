@@ -3,7 +3,7 @@ import typing
 import torch.utils.checkpoint
 
 from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, split_tensor_list, MergeCalls, \
-    FUSED_OPTIMIZER
+    FUSED_OPTIMIZER, get_key
 
 
 class MomentumNetSide(torch.nn.Module):
@@ -266,3 +266,49 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
                    for i in range(0, len(stem) - 1, 2)]
     out_modules.append(modules[-1])
     return torch.nn.ModuleList(out_modules)
+
+
+def is_float(inp: torch.Tensor):
+    return inp.dtype in (torch.float16, torch.bfloat16, torch.float32, torch.float64)
+
+
+def memory_efficient_intermediates(storage_dtype: typing.Optional[torch.dtype] = None,
+                                   storage_device: typing.Optional[torch.device] = None,
+                                   tensor_filter: typing.Callable[[torch.Tensor], bool] = is_float
+                                   ) -> torch.autograd.graph.saved_tensors_hooks:
+    """
+    This function returns a context manager which turns all storage for the backward pass into a specified data type.
+    By default, it will convert all float tensors to half precision, but it can also cast to any other data type like
+    float32 or int8.
+    In the forward pass, it will still use the tensors as they are computed, to avoid casting up and back down again.
+    This ensures that the forward pass has maximum precision and does not suffer from this context manager.
+    However, in the backward pass, the
+    whatever data
+    :param storage_dtype: Specifies the datatype used in storage. torch.half is recommended
+    :param storage_device: Specifies the location where intermediate tensors are stored. Useful for CPU-Offloading of
+    :param tensor_filter: A function that specifies whether a tensor should be acted upon (return True) or not
+    (return False). By default, it will check if the input tensor is of float type and cast/offload it only if it is.
+    intermediate values. (Not to be confused with CPU-Offloading of parameters)
+    :return: A `torch.autograd.graph.saved_tensors_hooks` context manager that will improve memory efficiency
+    """
+    counter = 0
+    storage: typing.Dict[str, torch.Tensor] = {}
+    dtypes: typing.Dict[str, torch.dtype] = {}
+    devices: typing.Dict[str, torch.dtype] = {}
+
+    def pack(inp: torch.Tensor):
+        nonlocal counter
+        counter += 1
+        assigned_name = get_key(counter - 1, inp)
+        dtypes[assigned_name] = inp.dtype
+        devices[assigned_name] = inp.device
+        if tensor_filter(inp):
+            inp = inp.to(dtype=storage_dtype, device=storage_device, non_blocking=True)
+        storage[assigned_name] = inp
+        return assigned_name
+
+    def unpack(key: str) -> torch.Tensor:
+        return storage[key].to(dtype=dtypes[key], device=devices[key], non_blocking=True)
+
+    return torch.autograd.graph.saved_tensors_hooks(pack, unpack)
+

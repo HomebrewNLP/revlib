@@ -200,6 +200,10 @@ class ReversibleModuleCache:
         self.x1 = x1.detach()
 
 
+def get_key(idx: int, inp: torch.Tensor):
+    return f'Index: {idx}\nSize: {inp.size()}\nDevice: {inp.device}\nDataType: {inp.dtype}'
+
+
 class ReversibleModule(torch.nn.Module):
     cpu_state: torch.Tensor
     cuda_states: typing.List[torch.Tensor]
@@ -262,16 +266,12 @@ class ReversibleModule(torch.nn.Module):
         if self.fused_optimizer is not None and self.cache is not None:
             raise ValueError("Fused optimizer is not currently supported with checkpointing and autograd-graph.")
 
-    def get_key(self, idx: int, inp: torch.Tensor):
-        key = f'Index: {idx}\nSize: {inp.size()}\nDevice: {inp.device}\nDataType: {inp.dtype}'
-        return key
-
     def pack(self, inp: torch.Tensor) -> str:
         self.counter += 1
-        return self.get_key(self.counter - 1, inp)
+        return get_key(self.counter - 1, inp)
 
     def inner_pack(self, inp: torch.Tensor):
-        self.storage[self.get_key(len(self.storage), inp)] = inp
+        self.storage[get_key(len(self.storage), inp)] = inp
 
     def inner_unpack(self, key: str):
         raise RuntimeError(f'Tensor not found.\nSpec:\n{key}')

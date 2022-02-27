@@ -17,6 +17,9 @@ Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support a
             * [iRevNet](#irevnet)
             * [Reformer](#reformer)
         * [Utils](#utils)
+            * [HuggingFace](#huggingface-integration)
+            * [Cast Intermediates](#Cast-Intermediates)
+            * [Offload Intermediates](#Offload-Intermediates)
     * [Explanation](#explanation)
 
 ## Features
@@ -272,12 +275,10 @@ storing all gradients simultaneously, you only keep the gradients of one layer w
 Below is a small example demonstrating just how much memory this can save:
 
 ```PYTHON
-import os
 import random
 import typing
 
 import numpy as np
-import psutil
 import torch
 
 import revlib
@@ -297,9 +298,6 @@ def block():
     return torch.nn.Sequential(torch.nn.Linear(SIZE, SIZE),
                                torch.nn.ReLU(),
                                torch.nn.Linear(SIZE, SIZE))
-
-
-process = psutil.Process(os.getpid())
 
 
 def run(fused: bool):
@@ -343,6 +341,8 @@ like [SM3](https://arxiv.org/abs/1901.11150) or
 [8-bit Adam](https://github.com/facebookresearch/bitsandbytes/#using-the-8-bit-optimizers) is perfect here.
 
 #### Utils
+
+##### HuggingFace Integration
 
 RevLib also has its own `utils` module which provides helpful functions as `residual_to_momentum_net`. Using RevLib, you
 can trivially convert any HuggingFace transformer into a MomentumNet without significant loss of performance. Especially
@@ -422,6 +422,102 @@ print(time.time() - start_time)
 print(memory - max(memory_usage((lambda: None,))))
 # 6187.0703125
 ```
+
+##### Cast Intermediates
+
+Another nice feature RevLib has, is that it can automatically offload intermediate values or cast them to another
+datatype. Casting the intermediate tensors used during the backward pass from float32 to half-precision (float16) would
+halve the memory required for intermediate values. Another option is to move these tensors off the accelerator and onto
+the GPU, allowing you to build even bigger models, even without RevNet.\
+To integrate it into existing code, take a look at what we do below:
+
+```PYTHON
+import torch
+
+from revlib.utils import memory_efficient_intermediates
+
+ITEMS = 2 ** 24
+ITERATIONS = 32
+
+
+def run():
+    # Model code here
+    torch.manual_seed(0)
+    out = a = torch.randn((ITEMS,), device='cuda', dtype=torch.float32, requires_grad=True)
+    for i in range(ITERATIONS):
+        out = out * torch.randn_like(a)
+    print(f'Output: {a.mean().item():} - Memory: {torch.cuda.memory_allocated() * 1e-6:.2f}MB', end='')
+    out.mean().backward()
+    print(f' - Grad: {out.mean().item()}')
+
+
+run()  # Output: -0.0002206185890827328 - Memory: 2281.70MB - Grad: 0.00011316053132759407
+
+with memory_efficient_intermediates(torch.half):
+    run()  # Output: -0.0002206185890827328 - Memory: 1207.96MB - Grad: 0.00011316053132759407
+```
+
+The peak memory consumption is over 2GB when running the function normally, as PyTorch has to allocate many intermediate
+values and store them in float32. If you instead add a cast to the tensors kept for the backward pass, the memory
+consumption gets halved while both output and gradient stay the same. Here, we only have to add
+the `memory_efficient_intermediates` context wrapper, which handles casts automatically.\
+Similar to casts from float32 to float16, you could also cast float64 to float16, float64 to float32 or even mix these!\
+For example, when switching the computation datatype above from float32 to float64, the program will generate the
+following printout:
+
+```
+Output: -1.2457215497263025e-05 - Memory: 4563.40MB - Grad: 0.00019801305610731704
+Output: -1.2457215497263025e-05 - Memory: 1342.18MB - Grad: 0.00019801305610731704
+```
+
+As you can see, the model uses almost four times less memory, giving you the memory advantages of float16 without losing
+any of the precision of float64.
+
+##### Offload Intermediates
+
+Going one step further with the concepts from above, we can even offload the intermediate values onto the CPU.
+Intermediate-Offloading is akin [Parameter-Offloading](#parameter-offload), as we've done above, but moves the adaptive
+memory onto the CPU while the GPU is free to compute whatever it wants. In practice, moving all intermediates means that
+the model has the same GPU-memory consumption as if it were to run with `torch.no_grad` or in `torch.inference_mode`
+while still allowing backpropagation without any loss of accuracy!
+
+```
+
+import torch
+
+from revlib.utils import memory_efficient_intermediates
+
+ITEMS = 2 ** 24
+ITERATIONS = 32
+
+
+def run():
+    # Model code here
+    torch.manual_seed(0)
+    out = a = torch.randn((ITEMS,), device='cuda', dtype=torch.float32, requires_grad=True)
+    for i in range(ITERATIONS):
+        out = out * torch.randn_like(a)
+    print(f'Output: {a.mean().item():} - Memory: {torch.cuda.memory_allocated() * 1e-6:.2f}MB', end='')
+    out.mean().backward()
+    print(f' - Grad: {out.mean().item()}')
+
+
+run()  # Output: -0.0002206185890827328 - Memory: 2281.70MB - Grad: 0.00011316053132759407
+
+with memory_efficient_intermediates(storage_device='cpu'):  # <-- This is the only line that's modified
+    run()  # Output: -0.0002206185890827328 - Memory: 134.22MB - Grad: 0.00011316053132759407
+
+with torch.no_grad():
+    run()  # Output: -0.0002206185890827328 - Memory: 134.22MB - Grad: 0.00011316053132759407
+    # It will error here, but that doesn't matter as the memory gets measured before the backward pass.
+```
+
+As you can see, the new memory consumption is the same as if the model were to run with `torch.no_grad`, with the minor
+difference that it can still produce 100% accurate gradients. Of course, this free memory doesn't come from anywhere.
+It's just that the tensors that have to be stored in the normal computation (but not with `torch.no_grad`)
+are now moved to the CPU.\
+However, as there is no real prefetching, the model will be slower, as PyTorch has to query a buffer for every
+intermediate tensor used in the backward pass and get the tensors from there.
 
 ## Explanation
 
