@@ -427,8 +427,7 @@ print(memory - max(memory_usage((lambda: None,))))
 
 Another nice feature RevLib has, is that it can automatically offload intermediate values or cast them to another
 datatype. Casting the intermediate tensors used during the backward pass from float32 to half-precision (float16) would
-halve the memory required for intermediate values. Another option is to move these tensors off the accelerator and onto
-the GPU, allowing you to build even bigger models, even without RevNet.\
+halve the memory required for intermediate values.\
 To integrate it into existing code, take a look at what we do below:
 
 ```PYTHON
@@ -460,7 +459,10 @@ with memory_efficient_intermediates(torch.half):
 The peak memory consumption is over 2GB when running the function normally, as PyTorch has to allocate many intermediate
 values and store them in float32. If you instead add a cast to the tensors kept for the backward pass, the memory
 consumption gets halved while both output and gradient stay the same. Here, we only have to add
-the `memory_efficient_intermediates` context wrapper, which handles casts automatically.\
+the `memory_efficient_intermediates` context wrapper, which handles casts automatically. Note that this only changes the
+tensors that are kept for the backward pass and alters the gradients slightly but doesn't influence the forward pass in
+any way. Nevertheless, doing it this way is critical to avoid casting down to float16 and back up again during the
+forward pass.\
 Similar to casts from float32 to float16, you could also cast float64 to float16, float64 to float32 or even mix these!\
 For example, when switching the computation datatype above from float32 to float64, the program will generate the
 following printout:
@@ -481,8 +483,7 @@ memory onto the CPU while the GPU is free to compute whatever it wants. In pract
 the model has the same GPU-memory consumption as if it were to run with `torch.no_grad` or in `torch.inference_mode`
 while still allowing backpropagation without any loss of accuracy!
 
-```
-
+```PYTHON
 import torch
 
 from revlib.utils import memory_efficient_intermediates
