@@ -512,7 +512,7 @@ with memory_efficient_intermediates(storage_device='cpu'):  # <-- This is the on
     run()  # Output: 0.00011316053132759407 - Memory: 134.22MB - Grad: 1.1337489974616588e-11
 
 with torch.no_grad():
-    run()  # Output: -0.0002206185890827328 - Memory: 134.22MB - Grad: 0.00011316053132759407
+    run()  # Output: 0.00011316053132759407 - Memory: 134.22MB
     # It will error here, but that doesn't matter as the memory gets measured before the backward pass.
 ```
 
