@@ -21,6 +21,7 @@ Simple and efficient RevNet-Library for PyTorch with XLA and DeepSpeed support a
             * [Cast Intermediates](#Cast-Intermediates)
             * [Offload Intermediates](#Offload-Intermediates)
     * [Explanation](#explanation)
+    * [Citation](#citation)
 
 ## Features
 
@@ -432,7 +433,6 @@ To integrate it into your existing code, you only have to wrap your step with th
 context manager. Wrapping multiple steps or even the entire training loop would cause memory leaks. Below you can see a
 small example of how the optimisation could use it in practice:
 
-
 ```PYTHON
 import torch
 
@@ -545,3 +545,16 @@ Ignoring the dual-path structure of a RevNet, it usually used to be much slower 
 RevLib uses minimal coupling functions and has no overhead between Sequence items, allowing it to train as fast as a
 comparable model with gradient checkpointing.
 
+## Citation
+
+```BIBTEX
+@software{nestler_lucas_2022_6837352,
+  author       = {Nestler, Lucas},
+  title        = {RevLib},
+  month        = jul,
+  year         = 2022,
+  publisher    = {Zenodo},
+  version      = {1.7.0},
+  doi          = {10.5281/zenodo.6837352},
+  url          = {https://doi.org/10.5281/zenodo.6837352}
+}```
