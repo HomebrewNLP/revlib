@@ -212,7 +212,6 @@ class ReversibleModule(torch.nn.Module):
                  coupling_inverse: typing.Optional[COUPLING] = None, memory_savings: bool = True,
                  cache: typing.Optional[ReversibleModuleCache] = None, target_device: str = "",
                  fused_optimizer: FUSED_OPTIMIZER = None):
-
         """
         A `ReversibleModule` that does the heavy lifting of dispatching to various backends in an effort to avoid
         storing all intermediate buffers at the same time. It can wrap any module.
@@ -273,7 +272,8 @@ class ReversibleModule(torch.nn.Module):
     def inner_pack(self, inp: torch.Tensor):
         self.storage[get_key(len(self.storage), inp)] = inp
 
-    def inner_unpack(self, key: str):
+    @staticmethod
+    def inner_unpack(key: str):
         raise RuntimeError(f'Tensor not found.\nSpec:\n{key}')
 
     def unpack(self, key: str) -> torch.Tensor:
