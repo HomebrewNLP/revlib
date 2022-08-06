@@ -1,7 +1,5 @@
 import typing
 
-import torch.utils.checkpoint
-
 from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, split_tensor_list, MergeCalls, \
     FUSED_OPTIMIZER, get_key
 
