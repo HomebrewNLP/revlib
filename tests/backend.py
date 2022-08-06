@@ -55,10 +55,10 @@ class BaseTest:
         return self.conv(self.channels, self.classes)
 
     def run(self, mod: torch.nn.Module):
-        pass
+        raise NotImplementedError
 
     def compare(self, inp0: typing.Any, inp1: typing.Any):
-        pass
+        raise NotImplementedError
 
     @staticmethod
     def revnet(blocks, memory_mode: revlib.MemoryModes):
@@ -79,7 +79,7 @@ class BaseTest:
             raise ValueError(f"{comparison.__name__=} failed")
 
     def __call__(self, *modules: torch.nn.Module, comparison: typing.Callable):
-        pass
+        raise NotImplementedError
 
 
 class RevTest(BaseTest):
