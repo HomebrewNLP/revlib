@@ -74,7 +74,8 @@ class BaseTest:
         modules = [mod.cuda() for mod in modules]
         rng_state = torch.get_rng_state()
         cuda_state = torch.utils.checkpoint.get_device_states(self.inp)
-        assert comparison(*(self.rng_run(mod, rng_state, cuda_state) for mod in modules))
+        if not comparison(*(self.rng_run(mod, rng_state, cuda_state) for mod in modules)):
+            raise ValueError(f"{comparison.__name__=} failed")
 
     def __call__(self, *modules: torch.nn.Module, comparison: typing.Callable):
         pass
