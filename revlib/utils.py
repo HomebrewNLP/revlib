@@ -1,7 +1,9 @@
 import typing
 
-from revlib.core import ReversibleSequential, MemoryModes, SingleBranchReversibleModule, split_tensor_list, MergeCalls, \
-    FUSED_OPTIMIZER, get_key
+import torch
+
+from revlib.core import (FUSED_OPTIMIZER, MemoryModes, MergeCalls, ReversibleSequential, SingleBranchReversibleModule,
+                         get_key, split_tensor_list)
 
 
 class MomentumNetSide(torch.nn.Module):
@@ -258,7 +260,7 @@ def module_list_to_momentum_net(module: torch.nn.ModuleList,
                                             coupling_inverse=mod.wrapped_module.coupling_inverse,
                                             memory_savings=mod.memory_savings, target_device=mod.target_device,
                                             cache=mod.cache, first=idx == 0, last=idx == len(stem) - 1,
-                                            fused_optimizer=fused_optimizer, split_dim=split_dim)
+                                            fused_optimizer=fused_optimizer)
                for idx, mod in enumerate(stem)]
     out_modules = [MergeCalls(modules[i], modules[i + 1], collate_fn=lambda y, x: [y] + x[0][1:])
                    for i in range(0, len(stem) - 1, 2)]
@@ -309,4 +311,3 @@ def memory_efficient_intermediates(storage_dtype: typing.Optional[torch.dtype] =
         return storage[key].to(dtype=dtypes[key], device=devices[key], non_blocking=True)
 
     return torch.autograd.graph.saved_tensors_hooks(pack, unpack)
-
