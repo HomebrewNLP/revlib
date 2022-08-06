@@ -57,9 +57,6 @@ class BaseTest:
     def run(self, mod: torch.nn.Module):
         raise NotImplementedError
 
-    def compare(self, inp0: typing.Any, inp1: typing.Any):
-        raise NotImplementedError
-
     @staticmethod
     def revnet(blocks, memory_mode: revlib.MemoryModes):
         return revlib.ReversibleSequential(*blocks, memory_mode=memory_mode)
@@ -88,3 +85,6 @@ class RevTest(BaseTest):
         out_mod = self.rev_output()
 
         self.run_and_compare(*(torch.nn.Sequential(inp_mod, mod, out_mod) for mod in modules), comparison=comparison)
+
+    def run(self, mod: torch.nn.Module):
+        raise NotImplementedError
