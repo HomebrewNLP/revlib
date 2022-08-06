@@ -385,14 +385,17 @@ class SingleBranchReversibleModule(ReversibleModule):
         self.first = first
         self.last = last
 
-    def forward(self, x1: torch.Tensor, *args, **kwargs) -> torch.Tensor:
+    def forward(self, x1: torch.Tensor, *args, **kwargs) -> torch.Tensor:  # skipcq: PYL-W0221
         if self.first:
             self.secondary_branch_buffer.clear()
             x0 = back0 = torch.zeros_like(x1)
             back = (back0, back0)
         else:
             x0, *back = self.secondary_branch_buffer.pop()
-        _, y1, *back = super(SingleBranchReversibleModule, self).forward((x0, x1, *back), *args, **kwargs)
+        inp = (x0, x1)
+        if back:
+            inp = inp + (back[0], back[1])
+        _, y1, *back = super(SingleBranchReversibleModule, self).forward(inp, *args, **kwargs)
         if self.last:
             if self.memory_savings and self.cache is None:
                 out = out0 = split_tensor_list(y1)
