@@ -336,7 +336,6 @@ class ReversibleModule(torch.nn.Module):
 
 class SingleBranchReversibleModule(ReversibleModule):
     def __init__(self, secondary_branch_buffer: typing.List[torch.Tensor], wrapped_module: torch.nn.Module,
-                 split_dim: int = 1,
                  coupling_forward: typing.Optional[COUPLING] = None,
                  coupling_inverse: typing.Optional[COUPLING] = None, memory_savings: bool = True,
                  cache: typing.Optional[ReversibleModuleCache] = None,
@@ -354,9 +353,6 @@ class SingleBranchReversibleModule(ReversibleModule):
         which is used to store additional outputs which aren't returned.
         :param wrapped_module: The one module that's supposed to be wrapped in a reversible way. (You need multiple
         sequential modules to see memory gains.)
-        :param split_dim: RevNets require two streams. This parameter specifies which dimension to split in half to
-        create the two streams. `None` would mean the input gets replicated for both streams. It's usually best to split
-        along the features, which is why the default (1) is compatible with convolutions.
         :param coupling_forward: RevNet uses y0 = (x0 + f(x1)) as a coupling function, but this allows you to set a
         custom one. For example, MomentumNet (https://arxiv.org/abs/2102.07870) uses
         y0 = (beta * x0 + (1 - beta) * f(x1)). The inputs to the coupling function are the residual stream and the
@@ -378,8 +374,7 @@ class SingleBranchReversibleModule(ReversibleModule):
         :param last: Whether it's the last module of a sequence. If so, it will run the necessary clean-up procedures to
         ensure pytorch's autograd will work.
         """
-        super(SingleBranchReversibleModule, self).__init__(split_dim=split_dim,
-                                                           wrapped_module=wrapped_module,
+        super(SingleBranchReversibleModule, self).__init__(wrapped_module=wrapped_module,
                                                            coupling_forward=coupling_forward,
                                                            coupling_inverse=coupling_inverse,
                                                            memory_savings=memory_savings,
