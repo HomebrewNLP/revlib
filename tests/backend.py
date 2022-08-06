@@ -60,7 +60,8 @@ class BaseTest:
     def compare(self, inp0: typing.Any, inp1: typing.Any):
         pass
 
-    def revnet(self, blocks, memory_mode: revlib.MemoryModes):
+    @staticmethod
+    def revnet(blocks, memory_mode: revlib.MemoryModes):
         return revlib.ReversibleSequential(*blocks, memory_mode=memory_mode)
 
     def rng_run(self, mod: torch.nn.Module, cpu_state: torch.Tensor,
