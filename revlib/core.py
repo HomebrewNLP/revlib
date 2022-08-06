@@ -45,7 +45,7 @@ def split_tensor_list(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Ten
     if isinstance(inp, typing.Iterable):
         inp = list(inp)
         return inp[0], inp[1:]
-    ValueError(f"Unsupported Type {type(inp)}")
+    raise ValueError(f"Unsupported Type {type(inp)}")
 
 
 def take_0th_tensor(inp: typing.Union[typing.Iterable[torch.Tensor], torch.Tensor]) -> torch.Tensor:
